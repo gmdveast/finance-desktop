@@ -336,6 +336,58 @@ test('Obsidian-плагин создаёт панель и связанную re
     assert.ok(listsPlugin.captureLists.currencies.includes('USD'));
   });
 
+  await t.test('переименовывает карточку с категорией со слешем и сохраняет счета', async () => {
+    const listsVault = new FakeVault();
+    await listsVault.createFolder('Finance Sync/operations');
+    await listsVault.create('Finance Sync/config/lists.json', JSON.stringify({
+      schema: 1,
+      lists: {
+        categories: [{ name: 'Работа / зарплата', type: 'Доход', emoji: '💼' }],
+        accounts: [{ id: 5, name: 'Основной', currency: 'RUB' }],
+      },
+    }));
+    const oldPath = 'Finance Sync/operations/1 — В очереди — 2026-10-14 — Работа - зарплата — 100 RUB.md';
+    await listsVault.create(oldPath, [
+      '---',
+      'finance_capture: true',
+      'finance_id: "legacy-category-event"',
+      'finance_json: "Finance Sync/incoming/legacy-category-event.json"',
+      'finance_category: "Работа / зарплата"',
+      '---',
+    ].join('\n'));
+    const originalRename = listsVault.rename.bind(listsVault);
+    listsVault.rename = async (file, target) => {
+      const parent = target.slice(0, target.lastIndexOf('/'));
+      if (!listsVault.getAbstractFileByPath(parent)) throw new Error('The parent object of the destination does not exist');
+      return originalRename(file, target);
+    };
+    const { PluginClass, notices } = loadPlugin();
+    const listsPlugin = new PluginClass({ vault: listsVault });
+    await listsPlugin.onload();
+    assert.equal(listsPlugin.captureLists.accounts.length, 1);
+    assert.ok([...listsVault.files.keys()].some((file) => file.includes('💼 Работа - зарплата')));
+    assert.ok(!notices.some((notice) => notice.startsWith('Справочники не приняты:')));
+  });
+
+  await t.test('оставляет принятые справочники доступными при ошибке обновления карточек', async () => {
+    const listsVault = new FakeVault();
+    const payload = {
+      schema: 1,
+      lists: { accounts: [{ id: 5, name: 'Основной', currency: 'RUB' }] },
+    };
+    await listsVault.create('Finance Sync/config/lists.json', JSON.stringify(payload));
+    const { PluginClass, notices } = loadPlugin();
+    const listsPlugin = new PluginClass({ vault: listsVault });
+    await listsPlugin.onload();
+    listsPlugin.syncCardCategoryEmojis = async () => { throw new Error('The parent object of the destination does not exist'); };
+    payload.lists.accounts[0].name = 'Основной счёт';
+    listsVault.files.get('Finance Sync/config/lists.json').content = JSON.stringify(payload);
+    assert.equal(await listsPlugin.refreshMobileLists(), true);
+    assert.deepEqual(listsPlugin.captureLists.accounts, [{ id: 5, name: 'Основной счёт', currency: 'RUB' }]);
+    assert.ok(notices.some((notice) => notice === 'Справочники приняты, но имена карточек не обновлены.'));
+    assert.ok(!notices.some((notice) => notice.startsWith('Справочники не приняты:')));
+  });
+
   await t.test('обновляет статусы в именах существующих карточек', async () => {
     const legacyVault = new FakeVault();
     const jsonPath = 'Finance Sync/incoming/legacy-event.json';
