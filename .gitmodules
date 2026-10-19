@@ -1,0 +1,3 @@
+[submodule "obsidian-plugin/finance-capture"]
+	path = obsidian-plugin/finance-capture
+	url = https://github.com/gmdveast/finance-capture.git

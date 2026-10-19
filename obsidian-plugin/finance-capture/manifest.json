@@ -1,9 +1,0 @@
-{
-  "id": "finance-capture",
-  "name": "Finance Capture",
-  "version": "0.10.7",
-  "minAppVersion": "1.5.0",
-  "description": "Adds account-aware finance capture, synced balances and reference lists, and readable operation cards.",
-  "author": "ii.knyazev",
-  "isDesktopOnly": false
-}
