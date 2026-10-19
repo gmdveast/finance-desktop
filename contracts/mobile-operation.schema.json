@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.finance/schemas/mobile-operation-v1.json",
+  "title": "Mobile finance operation",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema",
+    "id",
+    "author",
+    "createdAt",
+    "operation"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{5,127}$"
+    },
+    "author": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:19\\d{2}|[2-9]\\d{3})-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-](?:(?:0\\d|1[0-3]):[0-5]\\d|14:00))$"
+    },
+    "operation": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "date",
+        "type",
+        "amount",
+        "currency",
+        "accountId"
+      ],
+      "properties": {
+        "date": {
+          "type": "string",
+          "format": "date",
+          "pattern": "^(?:19\\d{2}|[2-9]\\d{3})-\\d{2}-\\d{2}$"
+        },
+        "type": {
+          "enum": [
+            "Доход",
+            "Расход",
+            "Перевод"
+          ]
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "amount": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 100000000,
+          "multipleOf": 1e-06
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "rate": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "minimum": 1e-12,
+          "maximum": 1000000.0
+        },
+        "necessity": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "accountId": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 104
+        },
+        "destinationAccountId": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 5,
+          "maximum": 104
+        },
+        "destinationAmount": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100000000,
+          "multipleOf": 1e-06
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "Перевод"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "destinationAccountId",
+              "destinationAmount"
+            ],
+            "properties": {
+              "destinationAccountId": {
+                "type": "integer"
+              },
+              "destinationAmount": {
+                "exclusiveMinimum": 0
+              }
+            }
+          },
+          "else": {
+            "required": [
+              "category"
+            ],
+            "properties": {
+              "category": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

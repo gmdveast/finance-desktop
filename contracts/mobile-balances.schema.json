@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.finance/contracts/mobile-balances.schema.json",
+  "title": "Finance Capture balance snapshot",
+  "type": "object",
+  "required": ["schema", "generatedAt", "asOfDate", "workbook", "accounts", "rates", "missingRates", "totalRub"],
+  "properties": {
+    "schema": { "const": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "asOfDate": { "type": "string", "format": "date" },
+    "workbook": { "type": "string", "minLength": 1 },
+    "accounts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "currency", "balance", "rate", "rateEffectiveDate", "rubAmount"],
+        "properties": {
+          "id": { "type": "integer", "minimum": 5, "maximum": 104 },
+          "name": { "type": "string", "minLength": 1 },
+          "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+          "balance": { "type": "number" },
+          "rate": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+          "rateEffectiveDate": { "type": ["string", "null"], "format": "date" },
+          "rubAmount": { "type": ["number", "null"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "rates": {
+      "type": "object",
+      "patternProperties": {
+        "^[A-Z]{3}$": {
+          "type": ["object", "null"],
+          "required": ["rate", "effectiveDate"],
+          "properties": {
+            "rate": { "type": "number", "exclusiveMinimum": 0 },
+            "effectiveDate": { "type": "string", "format": "date" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "missingRates": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z]{3}$" } },
+    "totalRub": { "type": ["number", "null"] }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Finance reset schema 1",
+  "type": "object",
+  "required": [
+    "schema",
+    "cutoff",
+    "ids"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "cutoff": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:19\\d{2}|[2-9]\\d{3})-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-](?:(?:0\\d|1[0-3]):[0-5]\\d|14:00))$"
+    },
+    "ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{5,127}$"
+      }
+    }
+  },
+  "additionalProperties": true
+}

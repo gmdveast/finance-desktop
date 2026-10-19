@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "id": "owner-phone-20261013T142355-a81f2c",
+  "author": "owner",
+  "createdAt": "2026-10-13T14:23:55+03:00",
+  "operation": {
+    "date": "2026-10-13",
+    "type": "Расход",
+    "category": "Продукты",
+    "description": "Продукты на неделю",
+    "amount": 2450.5,
+    "currency": "RUB",
+    "paymentMethod": "Банковская карта",
+    "necessity": "Обязательная",
+    "notes": "Добавлено с телефона"
+  }
+}

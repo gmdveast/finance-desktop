@@ -1,0 +1,40 @@
+{
+  "name": "finance-workbook-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local finance dashboard backed by an Excel workbook",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "stop": "node scripts/stop-server.mjs",
+    "restore:backup": "node scripts/restore-backup.mjs",
+    "dev": "node --watch server.js",
+    "import:inbox": "node scripts/import-inbox.mjs",
+    "check": "node --check server.js && node --check public/app.js && node --check scripts/import-inbox.mjs && node --check scripts/stop-server.mjs && node --check scripts/restore-backup.mjs && node --check lib/workbook-store.mjs && node --check lib/runtime-control.mjs && node --check lib/identity-state.mjs && node --check obsidian-plugin/finance-capture/main.js && node --check lib/input-boundary.mjs && node scripts/sync-mobile-validation.mjs --check && node --check lib/recovery-bundle.mjs && node --check scripts/recovery-bundle.mjs && node --check scripts/benchmark.mjs && node --check scripts/source-bundle.mjs && node --check scripts/manual-mobile.mjs",
+    "test": "npm run test:contracts && npm run test:plugin && npm run test:recovery && npm run test:storage && npm run test:api && npm run test:e2e",
+    "test:storage": "node --test --test-isolation=none tests/storage.test.mjs",
+    "test:plugin": "node --test --test-isolation=none tests/plugin.test.cjs",
+    "test:api": "node --test --test-isolation=none tests/api.test.js",
+    "test:e2e": "playwright test",
+    "qa": "npm run check && npm test",
+    "test:contracts": "node --test --test-isolation=none tests/contracts.test.mjs",
+    "recovery": "node scripts/recovery-bundle.mjs",
+    "test:recovery": "node --test --test-isolation=none tests/recovery.test.mjs",
+    "benchmark": "node scripts/benchmark.mjs",
+    "source:bundle": "node scripts/source-bundle.mjs",
+    "staging:mobile": "node scripts/manual-mobile.mjs"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "^0.9.12",
+    "express": "^5.1.0",
+    "jszip": "^3.10.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=24.15.0 <25"
+  }
+}

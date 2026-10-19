@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Finance receipt schema 1",
+  "type": "object",
+  "required": [
+    "schema",
+    "id",
+    "status"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "status": {
+      "enum": [
+        "imported",
+        "discarded",
+        "error"
+      ]
+    },
+    "author": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "duplicate": {
+      "type": "boolean"
+    },
+    "excelRow": {
+      "type": "integer",
+      "minimum": 5
+    },
+    "importedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "checkedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "checksum": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "backup": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sourceDeleted": {
+      "type": "boolean"
+    },
+    "cleanupError": {
+      "type": "string"
+    },
+    "receiptWarning": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "code": {
+      "type": "string"
+    },
+    "retryable": {
+      "type": "boolean"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "error"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "checkedAt",
+          "message"
+        ]
+      },
+      "else": {
+        "required": [
+          "author",
+          "duplicate",
+          "importedAt",
+          "checksum",
+          "backup"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": true
+}

@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.finance/contracts/mobile-lists.schema.json",
+  "title": "Finance Capture reference lists",
+  "type": "object",
+  "required": [
+    "schema",
+    "lists"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "workbook": {
+      "type": "string",
+      "minLength": 1
+    },
+    "lists": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "categories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "type"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "emoji": {
+                "type": "string",
+                "maxLength": 16
+              },
+              "type": {
+                "enum": [
+                  "Расход",
+                  "Доход"
+                ]
+              }
+            },
+            "additionalProperties": true
+          },
+          "maxItems": 200
+        },
+        "currencies": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "maxItems": 200
+        },
+        "necessities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "maxItems": 200
+        },
+        "operationTypes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "Расход",
+              "Доход",
+              "Перевод"
+            ]
+          },
+          "maxItems": 200
+        },
+        "accounts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "currency"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 104
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$"
+              },
+              "startDate": {
+                "type": "string",
+                "format": "date"
+              }
+            },
+            "additionalProperties": true
+          },
+          "maxItems": 100
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

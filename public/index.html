@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#16241f">
+  <title>Финансовый журнал</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Unbounded:wght@600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#overview" aria-label="Финансовый журнал">
+        <span class="brand-mark">Ф</span>
+        <span><strong>Финансы</strong><small>личный журнал</small></span>
+      </a>
+      <nav class="nav" aria-label="Основная навигация">
+        <button class="nav-item" data-view="overview"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="4" rx="2"/><rect x="14" y="11" width="7" height="10" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/></svg></span>Обзор</button>
+        <button class="nav-item" data-view="operations"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 7h13M16 3l4 4-4 4M17 17H4M8 13l-4 4 4 4"/></svg></span>Операции</button>
+        <button class="nav-item" data-view="balance"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7.5V6a2 2 0 0 1 2-2h11"/><path d="M4 7h15a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 1-1.73"/><path d="M16 12h5v4h-5a2 2 0 0 1 0-4Z"/></svg></span>Баланс</button>
+        <button class="nav-item" data-view="savings"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 9h16v11H4zM3 6h18v3H3zM12 6v14M12 6c-4 0-6-1-6-3 0-1 1-2 2-2 2 0 4 5 4 5Zm0 0c4 0 6-1 6-3 0-1-1-2-2-2-2 0-4 5-4 5Z"/></svg></span>Накопления</button>
+        <button class="nav-item" data-view="lists"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12"/><path d="m3.5 6 1 1 2-2M3.5 12l1 1 2-2M3.5 18l1 1 2-2"/></svg></span>Справочники</button>
+        <button class="nav-item" data-view="settings"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.08.37.29.72.6 1 .3.27.69.41 1.1.4h.09v4h-.09a1.7 1.7 0 0 0-1.7.6Z"/></svg></span>Настройки</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="file-state"><i></i><span>Excel подключён<small id="workbook-name">загрузка…</small></span></div>
+        <p>Перед каждой записью создаётся резервная копия.</p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="mobile-menu" id="mobile-menu" aria-label="Открыть меню">☰</button>
+        <div class="eyebrow">Личный финансовый журнал</div>
+        <div class="topbar-actions">
+          <button class="secondary-button" type="button" data-action="refresh-rates" aria-label="Обновить курсы ЦБ" title="Обновить курсы ЦБ"><span aria-hidden="true">↻</span><span class="desktop-label">Обновить курсы</span><span class="mobile-label">Курсы</span></button>
+          <button class="primary-button" type="button" data-action="add-operation" aria-label="Новая операция"><span aria-hidden="true">＋</span><span class="desktop-label">Новая операция</span><span class="mobile-label">Новая</span></button>
+        </div>
+      </header>
+      <section id="content" class="content" aria-live="polite">
+        <div class="loading-card"><span class="loader"></span><p>Читаем вашу таблицу…</p></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="operation-dialog" class="dialog">
+    <form id="operation-form" method="dialog">
+      <div class="dialog-head">
+        <div><p class="eyebrow">Запись в Excel</p><h2 id="dialog-title">Новая операция</h2></div>
+        <button type="button" class="icon-button" data-action="close-dialog" aria-label="Закрыть">×</button>
+      </div>
+      <input type="hidden" name="id">
+      <div class="type-switch" role="radiogroup" aria-label="Тип операции">
+        <label><input type="radio" name="type" value="Расход" checked><span>Расход</span></label>
+        <label><input type="radio" name="type" value="Доход"><span>Доход</span></label>
+        <label><input type="radio" name="type" value="Перевод"><span>Перевод</span></label>
+        <label><input type="radio" name="type" value="Инвестиция"><span>Инвестиция</span></label>
+      </div>
+      <div class="form-grid">
+        <label class="field"><span>Дата</span><input type="date" name="date" required></label>
+        <label class="field" id="category-field"><span>Категория</span><select name="category" required></select></label>
+        <label class="field" id="investment-category-field" hidden><span>Категория по типу счёта</span><input id="investment-category-label" type="text" readonly></label>
+        <label class="field field-wide" id="account-field"><span id="account-label">Счёт списания</span><select name="accountId" required></select></label>
+        <label class="field field-wide" id="destination-account-field" hidden><span>Счёт назначения</span><select name="destinationAccountId"></select></label>
+        <label class="field field-wide" id="investment-account-field" hidden><span>Накопительный счёт</span><select name="savingsAccountId"></select></label>
+        <label class="field"><span id="amount-label">Сумма</span><input type="number" name="amount" min="0.01" step="0.01" inputmode="decimal" required placeholder="0,00"></label>
+        <label class="field"><span>Валюта счёта</span><select name="currency" required disabled></select></label>
+        <label class="field field-wide" id="destination-amount-field" hidden><span>Сумма зачисления</span><input type="number" name="destinationAmount" min="0.000001" step="any" inputmode="decimal" placeholder="0,00"><small id="destination-amount-help">Для перевода между разными валютами укажите фактически зачисленную сумму.</small></label>
+        <div class="rate-panel field-wide">
+          <div><span class="field-label">Курс, ₽ за 1 единицу</span><small id="rate-status">Для RUB курс равен 1</small></div>
+          <input type="number" name="rate" min="0.000001" step="any" inputmode="decimal" value="1">
+          <label class="check"><input type="checkbox" name="manualRate"> Ввести вручную</label>
+        </div>
+        <label class="field" id="necessity-field"><span>Необходимость</span><select name="necessity"></select></label>
+        <label class="field field-wide"><span>Заметка</span><textarea name="notes" rows="3" maxlength="500" placeholder="Например, продукты на неделю"></textarea></label>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="secondary-button" data-action="close-dialog">Отмена</button>
+        <button type="submit" class="primary-button" id="save-operation">Сохранить в Excel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="savings-history-dialog" class="dialog savings-history-dialog" aria-labelledby="savings-history-title">
+    <div class="savings-history-dialog-content">
+      <div class="dialog-head">
+        <div><p class="eyebrow">Накопительный счёт</p><h2 id="savings-history-title">История счёта</h2></div>
+        <button type="button" class="icon-button" data-close-savings-history aria-label="Закрыть">×</button>
+      </div>
+      <div class="savings-history-summary"><span>Текущий остаток</span><strong id="savings-history-balance"></strong></div>
+      <div id="savings-history-content"></div>
+    </div>
+  </dialog>
+
+  <dialog id="restore-dialog" class="dialog restore-dialog">
+    <form id="restore-form" method="dialog">
+      <div class="dialog-head"><div><div class="eyebrow">Резервные копии</div><h2>Восстановить Excel</h2></div><button class="icon-button" type="button" data-close-restore aria-label="Закрыть">×</button></div>
+      <label class="field"><span>Резервная копия</span><select name="backup" required></select></label>
+      <p id="restore-backup-details" class="restore-warning"></p>
+      <div class="dialog-actions"><button type="button" class="secondary-button" data-close-restore>Отмена</button><button type="submit" class="danger-button">Восстановить</button></div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
