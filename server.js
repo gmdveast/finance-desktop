@@ -34,7 +34,8 @@ const CBR_BASE_URL = process.env.CBR_BASE_URL || 'https://www.cbr.ru/scripts/XML
 const CBR_CACHE_PATH = process.env.CBR_CACHE_PATH ? path.resolve(process.env.CBR_CACHE_PATH) : path.join(DATA_DIR, 'cbr-rates.json');
 const configuredSyncDir = process.env.FINANCE_SYNC_DIR || localConfig.syncInboxDir || 'mobile-sync';
 const SYNC_DIR = path.isAbsolute(configuredSyncDir) ? configuredSyncDir : path.resolve(__dirname, configuredSyncDir);
-const PORT = Number(process.env.PORT) || 4173;
+const PORT = process.env.PORT === undefined || process.env.PORT === '' ? 4173 : Number(process.env.PORT);
+if (!Number.isInteger(PORT) || PORT < 0 || PORT > 65535) throw new RangeError('PORT must be an integer from 0 to 65535.');
 const BACKUP_LIMIT = 30;
 const RECEIPT_RETENTION_DAYS = Number(localConfig.receiptRetentionDays) || 30;
 const ACCOUNT_START_ROW = 5;
@@ -2393,10 +2394,11 @@ app.use((error, _req, res, _next) => {
 });
 
 export function startServer(port = PORT) {
-  return app.listen(port, '127.0.0.1', () => {
-    console.log(`Финансы: http://127.0.0.1:${port}`);
+  const server = app.listen(port, '127.0.0.1', () => {
+    console.log(`Финансы: http://127.0.0.1:${server.address().port}`);
     console.log(`Excel: ${WORKBOOK_PATH}`);
   });
+  return server;
 }
 
 export function shutdownApplication(server) {
@@ -2439,7 +2441,7 @@ export async function startApplication(port = PORT) {
       dataDirectory: DATA_DIR,
       syncDirectory: SYNC_DIR,
       workbookStore,
-      onInstalled: () => startApplication(port),
+      onInstalled: (boundPort) => startApplication(boundPort ?? port),
     });
   }
   const release = await acquireWorkbookLock(WORKBOOK_PATH, { purpose: 'server', timeout: 0 });

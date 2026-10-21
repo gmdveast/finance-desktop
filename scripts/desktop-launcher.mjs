@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { lstat, unlink } from 'node:fs/promises';
+import { lstat, readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +15,7 @@ const userDirectory = localAppData ? path.join(localAppData, 'Finance') : null;
 const dataDirectory = userDirectory ? path.join(userDirectory, 'data') : null;
 const workbookPath = dataDirectory ? path.join(dataDirectory, 'uchet_povsednevnyh_finansov.xlsx') : null;
 const syncDirectory = userDirectory ? path.join(userDirectory, 'Finance Sync') : null;
-const appUrl = 'http://127.0.0.1:4173';
+const preferredPort = 4173;
 const nodeExecutable = path.join(appDirectory, 'runtime', 'node.exe');
 
 function readRegistryString(name) {
@@ -57,27 +57,37 @@ function setStorageEnvironment() {
   process.env.BACKUP_DIR = path.join(dataDirectory, 'backups');
   process.env.CBR_CACHE_PATH = path.join(dataDirectory, 'cbr-rates.json');
   process.env.FINANCE_SYNC_DIR = syncDirectory;
-  process.env.PORT = '4173';
+  process.env.PORT = String(preferredPort);
   process.env.NODE_ENV = 'production';
   process.env.FINANCE_INSTALL_ROOT = installRoot;
   process.env.FINANCE_CURRENT_VERSION = readRegistryString('CurrentVersion') || 'legacy';
   process.env.FINANCE_PREVIOUS_VERSION = readRegistryString('PreviousVersion') || '';
 }
 
-async function probeFinance() {
+async function readRuntimeDescriptor() {
+  if (!workbookPath) return null;
+  const descriptor = await readFile(runtimePath(workbookPath), 'utf8').then(JSON.parse).catch(() => null);
+  if (descriptor?.schema !== 1 || !Number.isInteger(descriptor.port) || descriptor.port < 1 || descriptor.port > 65535
+    || !Number.isInteger(descriptor.pid) || !/^[a-f0-9]{64}$/.test(descriptor.token || '')) return null;
+  return descriptor;
+}
+
+async function probeFinance(port) {
   let reachable = false;
   for (const route of ['/api/settings', '/api/setup/status']) {
     let response;
     try {
-      response = await fetch(`${appUrl}${route}`, { signal: AbortSignal.timeout(700) });
+      response = await fetch(`http://127.0.0.1:${port}${route}`, {
+        headers: { Accept: 'application/json' },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(700),
+      });
     } catch {
       continue;
     }
     reachable = true;
-    if (response.status === 404) continue;
-    if (!response.ok) return { occupied: true, finance: false };
     const payload = await response.json().catch(() => null);
-    if (typeof payload?.dataDirectory !== 'string') return { occupied: true, finance: false };
+    if (typeof payload?.dataDirectory !== 'string') continue;
     const actual = path.win32.resolve(payload.dataDirectory).toLowerCase();
     const expected = path.win32.resolve(dataDirectory).toLowerCase();
     return { occupied: true, finance: true, sameData: actual === expected };
@@ -98,8 +108,8 @@ function showMessage(message) {
   dialog.unref();
 }
 
-function openBrowser() {
-  const browser = spawn('rundll32.exe', ['url.dll,FileProtocolHandler', appUrl], {
+function openBrowser(port) {
+  const browser = spawn('rundll32.exe', ['url.dll,FileProtocolHandler', `http://127.0.0.1:${port}`], {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
@@ -112,37 +122,70 @@ const wait = (duration) => new Promise((resolve) => setTimeout(resolve, duration
 
 async function startFinance() {
   setStorageEnvironment();
-  const beforeStart = await probeFinance();
-  if (beforeStart.finance && beforeStart.sameData) {
-    openBrowser();
-    return;
-  }
-  if (beforeStart.occupied) throw new Error('Порт Finance уже занят. Закройте другое приложение Finance или повторите запуск позже.');
-
-  const server = spawn(nodeExecutable, [path.join(appDirectory, 'server.js')], {
-    cwd: appDirectory,
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-    env: process.env,
-  });
-  let exited = false;
-  server.once('error', () => { exited = true; });
-  server.once('exit', () => { exited = true; });
-  server.unref();
-
-  const deadline = Date.now() + 30000;
-  while (Date.now() < deadline) {
-    if (exited) break;
-    const state = await probeFinance();
-    if (state.finance && state.sameData) {
-      openBrowser();
+  const previousRuntime = await readRuntimeDescriptor();
+  if (previousRuntime) {
+    const running = await probeFinance(previousRuntime.port);
+    if (running.finance && running.sameData) {
+      openBrowser(previousRuntime.port);
       return;
     }
-    if (state.occupied) throw new Error('Порт Finance уже занят. Закройте другое приложение Finance или повторите запуск позже.');
-    await wait(400);
   }
-  throw new Error('Finance не запустился. Повторите попытку; если ошибка останется, обратитесь за поддержкой.');
+
+  const preferred = await probeFinance(preferredPort);
+  if (preferred.finance && preferred.sameData) {
+    openBrowser(preferredPort);
+    return;
+  }
+
+  async function launchFinance(port, staleToken) {
+    process.env.PORT = String(port);
+    const server = spawn(nodeExecutable, [path.join(appDirectory, 'server.js')], {
+      cwd: appDirectory,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: process.env,
+    });
+    let exited = false;
+    server.once('error', () => { exited = true; });
+    server.once('exit', () => { exited = true; });
+    server.unref();
+
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+      const descriptor = await readRuntimeDescriptor();
+      if (descriptor && descriptor.token !== staleToken) {
+        const state = await probeFinance(descriptor.port);
+        if (state.finance && state.sameData) return { status: 'started', port: descriptor.port };
+      }
+      if (exited) return { status: 'exited' };
+      await wait(400);
+    }
+    return { status: 'timeout' };
+  }
+
+  const initialPort = preferred.occupied ? 0 : preferredPort;
+  let result = await launchFinance(initialPort, previousRuntime?.token);
+  if (result.status === 'started') {
+    openBrowser(result.port);
+    return;
+  }
+  if (initialPort === preferredPort && result.status === 'exited') {
+    const active = await probeFinance(preferredPort);
+    if (active.finance && active.sameData) {
+      openBrowser(preferredPort);
+      return;
+    }
+    result = await launchFinance(0, (await readRuntimeDescriptor())?.token);
+    if (result.status === 'started') {
+      openBrowser(result.port);
+      return;
+    }
+  }
+  if (result.status === 'timeout') {
+    throw new Error('Finance запускается слишком долго. Подождите немного и повторите запуск.');
+  }
+  throw new Error('Не удалось запустить Finance на локальном порту. Закройте другие экземпляры Finance и повторите запуск.');
 }
 
 async function stopFinance() {
@@ -153,7 +196,7 @@ async function stopFinance() {
     throw error;
   });
   if (!runtimeExists) {
-    const state = await probeFinance();
+    const state = await probeFinance(preferredPort);
     if (!state.finance || !state.sameData) return;
     throw new Error('Finance запущен без защищённого маркера управления. Не удалось безопасно остановить его.');
   }
