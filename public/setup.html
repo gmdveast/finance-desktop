@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#16241f">
+  <title>Первый запуск — Финансовый журнал</title>
+  <link rel="stylesheet" href="/setup.css">
+</head>
+<body>
+  <main class="setup-shell">
+    <div class="brand-mark" aria-hidden="true">Ф</div>
+    <p class="eyebrow">FINANCE · ПЕРВЫЙ ЗАПУСК</p>
+    <h1>Подготовим ваш финансовый журнал</h1>
+    <p class="intro">Выберите, с чего начать. Книга будет храниться на этом компьютере и останется под вашим контролем.</p>
+
+    <section class="storage-card" aria-labelledby="storage-title">
+      <h2 id="storage-title">Где будут лежать данные</h2>
+      <div class="storage-path"><span>Папка данных Finance</span><code id="data-location">Загружаем расположение…</code></div>
+      <div class="storage-path"><span>Рабочая книга</span><code id="workbook-location">Загружаем расположение…</code></div>
+      <div class="storage-path"><span>Резервные копии</span><code id="backup-location">Загружаем расположение…</code></div>
+      <div class="storage-path"><span>Папка синхронизации</span><code id="sync-location">Загружаем расположение…</code></div>
+      <p>Резервные копии находятся на этом компьютере. После настройки эти папки можно открыть в разделе «Настройки».</p>
+    </section>
+
+    <section class="choice" aria-labelledby="new-title">
+      <div class="choice-copy">
+        <span class="step">01</span>
+        <div>
+          <h2 id="new-title">Создать новую книгу</h2>
+          <p>Начать с чистого шаблона Finance без финансовых записей.</p>
+        </div>
+      </div>
+      <button id="create-book" class="primary" type="button">Создать новую книгу</button>
+    </section>
+
+    <section class="choice" aria-labelledby="import-title">
+      <div class="choice-copy">
+        <span class="step">02</span>
+        <div>
+          <h2 id="import-title">Подключить существующую книгу</h2>
+          <p>Выберите файл Finance в формате .xlsx с листами «Операции», «Списки», «Баланс» и «Сводка». Приложение проверит его и создаст рабочую копию. Исходный файл не изменится.</p>
+        </div>
+      </div>
+      <label class="file-picker" for="workbook-file">Выбрать файл .xlsx</label>
+      <input id="workbook-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+      <div id="selected-file" class="selected-file" aria-live="polite">Файл не выбран</div>
+      <button id="import-book" class="secondary" type="button" disabled>Проверить и подключить</button>
+    </section>
+
+    <p class="privacy-note"><span aria-hidden="true">●</span> Выбранная книга обрабатывается локально. Finance не загружает её в облако.</p>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+  </main>
+  <script type="module" src="/setup.js"></script>
+</body>
+</html>

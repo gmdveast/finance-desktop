@@ -6,14 +6,21 @@ import JSZip from 'jszip';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { createHash, randomUUID } from 'node:crypto';
 import { watch } from 'node:fs';
-import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WorkbookStore, digest, acquireWorkbookLock } from './lib/workbook-store.mjs';
 import { authorizedShutdown, publishRuntime, removeRuntime } from './lib/runtime-control.mjs';
+import { startFirstRunApplication } from './lib/first-run.mjs';
+import { createUpdateService } from './lib/update-service.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const packageInfo = await readFile(path.join(__dirname, 'package.json'), 'utf8').then(JSON.parse).catch(() => ({}));
+const RELEASE_INFO = await readFile(path.join(__dirname, 'release-info.json'), 'utf8').then(JSON.parse).catch(() => ({ version: packageInfo.version || 'development', channel: 'development' }));
+const updateService = createUpdateService({ currentVersion: RELEASE_INFO.version, channel: RELEASE_INFO.channel });
+let updateInstallPending = false;
 const DATA_DIR = path.resolve(process.env.FINANCE_DATA_DIR || path.join(__dirname, 'local-data'));
 const CONFIG_PATH = process.env.FINANCE_CONFIG_PATH
   ? path.resolve(process.env.FINANCE_CONFIG_PATH)
@@ -499,6 +506,16 @@ async function publishMobileLists(rootDirectory, workbook) {
 export async function exportMobileBalancesOnce(rootDirectory = SYNC_DIR) {
   await prepareBalanceRates();
   return withWorkbookQueue(async () => publishMobileBalances(rootDirectory, await loadWorkbook()));
+}
+
+export async function publishMobileSnapshotOnce(rootDirectory = SYNC_DIR) {
+  await prepareBalanceRates();
+  return withWorkbookQueue(async () => {
+    const workbook = await loadWorkbook();
+    const lists = await publishMobileLists(rootDirectory, workbook);
+    const balances = await publishMobileBalances(rootDirectory, workbook);
+    return { lists, balances };
+  });
 }
 
 async function prepareBalanceRates() {
@@ -2190,11 +2207,35 @@ app.delete('/api/accounts/:id', async (req, res, next) => {
 
 app.put('/api/balances', (_req, res) => res.status(410).json({ error: 'Экран баланса обновлён. Перезагрузите приложение.' }));
 
+async function inspectPublishedMobileLists() {
+  const file = path.join(SYNC_DIR, 'config', 'lists.json');
+  let contents;
+  let modifiedAt;
+  try {
+    const [fileContents, info] = await Promise.all([readFile(file, 'utf8'), stat(file)]);
+    contents = fileContents;
+    modifiedAt = info.mtime.toISOString();
+  } catch (error) {
+    return { state: error.code === 'ENOENT' ? 'missing' : 'unavailable', accountCount: 0, modifiedAt: null };
+  }
+  let payload;
+  try { payload = JSON.parse(contents); }
+  catch { return { state: 'invalid', accountCount: 0, modifiedAt }; }
+  const accounts = payload?.schema === 1 && Array.isArray(payload?.lists?.accounts)
+    ? payload.lists.accounts
+    : null;
+  if (!accounts || accounts.some((account) => !Number.isSafeInteger(account?.id) || typeof account?.name !== 'string' || typeof account?.currency !== 'string')) return { state: 'invalid', accountCount: 0, modifiedAt };
+  return { state: accounts.length ? 'ready' : 'no-accounts', accountCount: accounts.length, modifiedAt };
+}
+
 app.get('/api/settings', async (_req, res, next) => {
   try {
     const workbookStat = await stat(WORKBOOK_PATH);
     const backups = await listBackups();
+    const mobileLists = await inspectPublishedMobileLists();
+    const rollbackVersion = await inspectRollbackVersion();
     res.json({
+      dataDirectory: DATA_DIR,
       workbookPath: WORKBOOK_PATH,
       workbookModifiedAt: workbookStat.mtime.toISOString(),
       syncDirectory: SYNC_DIR,
@@ -2205,8 +2246,87 @@ app.get('/api/settings', async (_req, res, next) => {
       backups,
       receiptRetentionDays: RECEIPT_RETENTION_DAYS,
       sync: syncStatus,
+      mobileLists,
+      updates: {
+        version: RELEASE_INFO.version,
+        channel: RELEASE_INFO.channel,
+        rollbackVersion,
+      },
     });
   } catch (error) { next(error); }
+});
+
+async function inspectRollbackVersion() {
+  const version = process.env.FINANCE_PREVIOUS_VERSION;
+  const root = process.env.FINANCE_INSTALL_ROOT;
+  if (process.platform !== 'win32' || !root || !version || version === process.env.FINANCE_CURRENT_VERSION) return null;
+  if (version !== 'legacy' && !/^[A-Za-z0-9][A-Za-z0-9.-]{0,79}$/.test(version)) return null;
+  const directory = version === 'legacy' ? path.resolve(root) : path.resolve(root, 'versions', version);
+  const rootPrefix = `${path.resolve(root)}${path.sep}`;
+  if (version !== 'legacy' && !directory.startsWith(rootPrefix)) return null;
+  try {
+    const directoryInfo = await lstat(directory);
+    if (!directoryInfo.isDirectory()) return null;
+    const files = await Promise.all(['server.js', 'runtime/node.exe', 'scripts/desktop-launcher.mjs'].map((relative) => lstat(path.join(directory, relative))));
+    return files.every((item) => item.isFile()) ? version : null;
+  } catch { return null; }
+}
+
+function launchDesktopHelper(mode, extra = []) {
+  const helperPath = path.join(__dirname, 'scripts', 'desktop-launcher.mjs');
+  const child = spawn(process.execPath, [helperPath, mode, ...extra], {
+    cwd: __dirname,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.once('error', (error) => {
+    diagnose(error);
+    updateInstallPending = false;
+  });
+  child.unref();
+}
+
+app.get('/api/updates/check', async (_req, res) => {
+  try { res.json(await updateService.check()); }
+  catch (error) {
+    diagnose(error);
+    res.status(503).json({ error: 'Не удалось проверить обновления. Проверьте подключение к интернету и повторите попытку.', code: 'UPDATE_CHECK_FAILED', retryable: true });
+  }
+});
+
+app.post('/api/updates/install', async (req, res) => {
+  if (process.platform !== 'win32' || !process.env.FINANCE_INSTALL_ROOT || !['beta', 'stable'].includes(RELEASE_INFO.channel)) {
+    return res.status(409).json({ error: 'Установка обновлений доступна только в упакованной версии Finance для Windows.', code: 'UPDATE_INSTALL_UNAVAILABLE', retryable: false });
+  }
+  if (updateInstallPending) return res.status(409).json({ error: 'Установка обновления уже запущена.', code: 'UPDATE_INSTALL_PENDING', retryable: true });
+  let version;
+  try { version = textField(req.body?.version, 80, 'version', { optional: false }); }
+  catch { return res.status(400).json({ error: 'Некорректная версия обновления.', code: 'INVALID_INPUT', retryable: false }); }
+  let installerPath = null;
+  try {
+    const downloaded = await updateService.downloadInstaller(version);
+    installerPath = path.join(tmpdir(), `Finance-Update-${version}-${randomUUID()}.exe`);
+    await writeFile(installerPath, downloaded.bytes, { flag: 'wx', mode: 0o600 });
+    updateInstallPending = true;
+    res.status(202).json({ queued: true, version: downloaded.version });
+    res.once('finish', () => {
+      launchDesktopHelper('install', [installerPath]);
+      const pendingTimeout = setTimeout(() => { updateInstallPending = false; }, 10 * 60 * 1000);
+      pendingTimeout.unref();
+    });
+  } catch (error) {
+    if (installerPath) await unlink(installerPath).catch(() => {});
+    diagnose(error);
+    res.status(502).json({ error: 'Не удалось загрузить и проверить установщик. Приложение и ваши данные не менялись.', code: 'UPDATE_DOWNLOAD_FAILED', retryable: true });
+  }
+});
+
+app.post('/api/updates/rollback', async (_req, res) => {
+  const rollbackVersion = await inspectRollbackVersion();
+  if (!rollbackVersion) return res.status(409).json({ error: 'Предыдущая версия Finance недоступна для отката.', code: 'ROLLBACK_UNAVAILABLE', retryable: false });
+  res.status(202).json({ queued: true, version: rollbackVersion });
+  res.once('finish', () => launchDesktopHelper('rollback'));
 });
 
 app.post('/api/settings/restore-backup', async (req, res, next) => {
@@ -2226,7 +2346,7 @@ app.post('/api/settings/restore-backup', async (req, res, next) => {
 
 app.post('/api/settings/open-folder', async (req, res, next) => {
   try {
-    const targets = { workbook: path.dirname(WORKBOOK_PATH), backups: BACKUP_DIR, sync: SYNC_DIR };
+    const targets = { data: DATA_DIR, workbook: path.dirname(WORKBOOK_PATH), backups: BACKUP_DIR, sync: SYNC_DIR };
     const target = targets[clean(req.body?.target)];
     if (!target) throw new InputError('Неизвестная системная папка.');
     await mkdir(target, { recursive: true });
@@ -2245,6 +2365,24 @@ app.post('/api/settings/open-folder', async (req, res, next) => {
 app.post('/api/settings/export-mobile', async (_req, res, next) => {
   try {
     res.json(await synchronizeMobile());
+  } catch (error) { next(error); }
+});
+
+app.post('/api/settings/publish-mobile', async (_req, res, next) => {
+  try {
+    const { lists, balances } = await publishMobileSnapshotOnce(SYNC_DIR);
+    const warnings = [];
+    if (balances?.payload?.missingRates?.length) warnings.push(`Нет курсов: ${balances.payload.missingRates.join(', ')}`);
+    const listsPublished = Boolean(lists);
+    const balancesPublished = Boolean(balances);
+    res.json({
+      listsPublished,
+      listsChanged: Boolean(lists?.changed),
+      balancesPublished,
+      balancesChanged: Boolean(balances?.changed),
+      warnings,
+      ok: listsPublished && balancesPublished && warnings.length === 0,
+    });
   } catch (error) { next(error); }
 });
 
@@ -2276,6 +2414,34 @@ export function shutdownApplication(server) {
 }
 
 export async function startApplication(port = PORT) {
+  const applicationDirectories = new Set([
+    DATA_DIR,
+    path.dirname(CONFIG_PATH),
+    path.dirname(WORKBOOK_PATH),
+    BACKUP_DIR,
+    path.dirname(CBR_CACHE_PATH),
+    SYNC_DIR,
+    path.join(SYNC_DIR, 'incoming'),
+    path.join(SYNC_DIR, 'receipts'),
+    path.join(SYNC_DIR, 'config'),
+  ]);
+  await Promise.all([...applicationDirectories].map((directory) => mkdir(directory, { recursive: true })));
+  const workbookExists = await lstat(WORKBOOK_PATH).then(() => true, (error) => {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  });
+  if (!workbookExists) {
+    return startFirstRunApplication({
+      port,
+      workbookPath: WORKBOOK_PATH,
+      templatePath: path.join(__dirname, 'templates', 'finance-template.xlsx'),
+      publicDirectory: path.join(__dirname, 'public'),
+      dataDirectory: DATA_DIR,
+      syncDirectory: SYNC_DIR,
+      workbookStore,
+      onInstalled: () => startApplication(port),
+    });
+  }
   const release = await acquireWorkbookLock(WORKBOOK_PATH, { purpose: 'server', timeout: 0 });
   let server;
   let descriptor;

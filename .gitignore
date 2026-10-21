@@ -9,6 +9,8 @@ node_modules/
 /config/
 *.xls
 *.xlsx
+!/templates/
+!/templates/finance-template.xlsx
 *.xlsm
 *.tmp
 *.tmp.*

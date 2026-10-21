@@ -10,6 +10,35 @@ test.beforeEach(async ({ page }) => {
   await page.clock.setFixedTime(new Date(TEST_INSTANT));
 });
 
+scenario('настройки отдельно показывают обновление desktop и Finance Capture через BRAT', async ({ page }) => {
+  await page.route('**/api/updates/check', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      enabled: true,
+      currentVersion: '1.0.0-beta.1',
+      channel: 'beta',
+      update: {
+        version: '1.0.0-beta.2',
+        channel: 'beta',
+        publishedAt: '2026-10-20T10:00:00Z',
+        notes: 'Исправления и упрощение обновления.',
+        url: 'https://github.com/gmdveast/finance-desktop/releases/tag/v1.0.0-beta.2',
+        installerName: 'Finance-Setup-1.0.0-beta.2-x64.exe',
+      },
+    }),
+  }));
+  await page.goto('/#settings');
+  await expect(page.getByRole('heading', { name: 'Обновление Finance' })).toBeVisible();
+  await expect(page.locator('.update-plugin-note')).toContainText('Finance Capture обновляется отдельно');
+  await expect(page.locator('.update-plugin-note')).toContainText('Эта проверка desktop не меняет версию плагина');
+  await page.locator('[data-check-update]').click();
+  await expect(page.getByText('Доступна версия 1.0.0-beta.2 (beta).')).toBeVisible();
+  await expect(page.getByText('Исправления и упрощение обновления.')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Описание выпуска' })).toHaveAttribute('href', 'https://github.com/gmdveast/finance-desktop/releases/tag/v1.0.0-beta.2');
+  await expect(page.getByRole('button', { name: 'Скачать и установить' })).toBeVisible();
+});
+
 scenario('audit: вкладка накоплений предлагает только вывод и синхронизирует суммы одной валюты', async ({ page, request }) => {
   const data = await (await request.get('/api/data')).json();
   const main = data.accounts[0];
@@ -143,6 +172,43 @@ scenario('инвестицию и вывод из накоплений можн�
   expect(savedWithdrawal).toMatchObject({ type: 'Перевод', amount: 5, destinationAmount: 450, notes: 'Вывод исправлен' });
   expect(updated.savingsAccounts.find((item) => item.id === savingsId).calculatedBalance).toBe(110);
   expect(updated.accounts.find((item) => item.id === main.id).calculatedBalance).toBe(main.calculatedBalance + 430);
+});
+
+scenario('подключение телефона необязательно и показывает готовность справочников без тестовой операции', async ({ page, request }) => {
+  await page.goto('/#overview');
+  await page.evaluate(() => localStorage.removeItem('finance-phone-setup-checks'));
+  const beforeSnapshot = await (await request.get('/api/snapshot')).json();
+  const beforeData = await (await request.get('/api/data')).json();
+  const published = await request.post('/api/settings/publish-mobile');
+  expect(published.ok()).toBeTruthy();
+  expect(await published.json()).toMatchObject({ listsPublished: true, balancesPublished: true });
+  const afterSnapshot = await (await request.get('/api/snapshot')).json();
+  const afterData = await (await request.get('/api/data')).json();
+  expect(afterSnapshot.revision).toBe(beforeSnapshot.revision);
+  expect(afterData.operations).toHaveLength(beforeData.operations.length);
+  const settings = await (await request.get('/api/settings')).json();
+  expect(settings.mobileLists.state).toBe('ready');
+  expect(settings.mobileLists.accountCount).toBeGreaterThan(0);
+
+  await page.goto('/#phone');
+  await expect(page.getByRole('heading', { name: 'Подключить телефон' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'На компьютере подготовлены счета' })).toBeVisible();
+  await expect(page.getByText('Подключение телефона можно завершить позже. Принятые с телефона операции импортируются в книгу только на этом компьютере.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Открыть инструкцию' })).toBeVisible();
+  await expect(page.locator('.phone-diagnostics')).not.toHaveAttribute('open', '');
+  await expect(page.getByRole('button', { name: 'Новая операция' })).toBeHidden();
+  const publishResponse = page.waitForResponse((response) => response.url().endsWith('/api/settings/publish-mobile') && response.request().method() === 'POST');
+  await page.getByRole('button', { name: 'Подготовить данные для телефона' }).click();
+  expect((await publishResponse).ok()).toBeTruthy();
+  await expect(page.locator('#toast')).toContainText('Справочники готовы для Syncthing');
+
+  await page.locator('[data-phone-check="syncthing"]').check();
+  await expect(page.locator('.phone-checklist-card .tag')).toHaveText('1 из 3');
+  await page.reload();
+  await expect(page.locator('[data-phone-check="syncthing"]')).toBeChecked();
+  await page.getByRole('button', { name: 'Продолжить позже' }).click();
+  await expect(page).toHaveURL(/#overview$/);
+  await expect(page.getByRole('heading', { name: /Обзор за/ })).toBeVisible();
 });
 
 scenario('старый сервер требует перезапуска вместо ложной ошибки баланса', async ({ page }) => {
@@ -366,7 +432,7 @@ scenario('все экраны и основной финансовый сцен�
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /Обзор за/ })).toBeVisible();
   await expect(page.locator('#workbook-name')).toHaveText('e2e.xlsx');
-  await expect(page.locator('.nav-item .nav-icon svg')).toHaveCount(6);
+  await expect(page.locator('.nav-item .nav-icon svg')).toHaveCount(7);
   await expect(page.locator('.nav-item[data-view="balance"] .nav-icon svg')).toBeVisible();
 
   await expect(page.locator('[data-action="refresh-rates"]')).toBeHidden();
@@ -530,7 +596,7 @@ scenario('все экраны и основной финансовый сцен�
   await expect(page.getByRole('heading', { name: 'Настройки' })).toBeVisible();
   await expect(page.getByText('Excel и резервные копии')).toBeVisible();
   await expect(page.getByText('Мобильная синхронизация')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Открыть папку Excel' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Открыть папку книги' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Открыть бэкапы' })).toBeVisible();
   const restoreButtonPlacement = await page.locator('.settings-grid .settings-card:first-child .settings-actions').evaluate((actions) => {
     const box = actions.getBoundingClientRect();

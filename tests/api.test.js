@@ -133,6 +133,19 @@ function defineScenarios(context, scenario) {
     assert.ok(Array.isArray(settings.payload.backups));
   });
 
+  scenario('обновление не включается в dev-сборке и не принимает установку без упакованного приложения', async () => {
+    const check = await jsonRequest(baseUrl, '/api/updates/check');
+    assert.equal(check.response.status, 200);
+    assert.equal(check.payload.enabled, false);
+    assert.equal(check.payload.channel, 'development');
+    const install = await send('/api/updates/install', { version: '1.0.1' });
+    assert.equal(install.response.status, 409);
+    assert.equal(install.payload.code, 'UPDATE_INSTALL_UNAVAILABLE');
+    const rollback = await jsonRequest(baseUrl, '/api/updates/rollback', { method: 'POST' });
+    assert.equal(rollback.response.status, 409);
+    assert.equal(rollback.payload.code, 'ROLLBACK_UNAVAILABLE');
+  });
+
   scenario('добавляет эмодзи существующим категориям один раз', async () => {
     const excel = await loadWorkbook();
     const first = migrateCategoryEmojis(excel);

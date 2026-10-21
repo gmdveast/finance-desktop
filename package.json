@@ -11,11 +11,12 @@
     "dev": "node --watch server.js",
     "import:inbox": "node scripts/import-inbox.mjs",
     "setup:submodules": "git submodule update --init --recursive",
-    "check": "node --check server.js && node --check public/app.js && node --check scripts/import-inbox.mjs && node --check scripts/stop-server.mjs && node --check scripts/restore-backup.mjs && node --check lib/workbook-store.mjs && node --check lib/runtime-control.mjs && node --check lib/identity-state.mjs && node --check obsidian-plugin/finance-capture/main.js && node --check lib/input-boundary.mjs && node scripts/sync-mobile-validation.mjs --check && node --check lib/recovery-bundle.mjs && node --check scripts/recovery-bundle.mjs && node --check scripts/benchmark.mjs && node --check scripts/source-bundle.mjs && node --check scripts/manual-mobile.mjs",
-    "test": "npm run test:contracts && npm run test:plugin && npm run test:recovery && npm run test:storage && npm run test:api && npm run test:e2e",
+    "check": "node --check server.js && node --check public/app.js && node --check public/setup.js && node --check scripts/import-inbox.mjs && node --check scripts/stop-server.mjs && node --check scripts/restore-backup.mjs && node --check scripts/desktop-launcher.mjs && node --check lib/workbook-store.mjs && node --check lib/first-run.mjs && node --check lib/runtime-control.mjs && node --check lib/update-service.mjs && node --check lib/identity-state.mjs && node --check obsidian-plugin/finance-capture/main.js && node --check lib/input-boundary.mjs && node scripts/sync-mobile-validation.mjs --check && node --check lib/recovery-bundle.mjs && node --check scripts/recovery-bundle.mjs && node --check scripts/benchmark.mjs && node --check scripts/source-bundle.mjs && node --check scripts/manual-mobile.mjs",
+    "test": "npm run test:contracts && npm run test:plugin && npm run test:recovery && npm run test:updates && npm run test:storage && npm run test:api && npm run test:e2e",
     "test:storage": "node --test --test-isolation=none tests/storage.test.mjs",
     "test:plugin": "node --test --test-isolation=none tests/plugin.test.cjs",
     "test:api": "node --test --test-isolation=none tests/api.test.js",
+    "test:updates": "node --test --test-isolation=none tests/update-service.test.mjs",
     "test:e2e": "playwright test",
     "qa": "npm run check && npm test",
     "test:contracts": "node --test --test-isolation=none tests/contracts.test.mjs",
@@ -23,6 +24,7 @@
     "test:recovery": "node --test --test-isolation=none tests/recovery.test.mjs",
     "benchmark": "node scripts/benchmark.mjs",
     "source:bundle": "node scripts/source-bundle.mjs",
+    "package:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1",
     "staging:mobile": "node scripts/manual-mobile.mjs"
   },
   "dependencies": {

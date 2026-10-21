@@ -11,7 +11,8 @@ savingsHistoryDialog.addEventListener('click', (event) => {
 const toast = document.querySelector('#toast');
 const restoreDialog = document.querySelector('#restore-dialog');
 const restoreForm = document.querySelector('#restore-form');
-const VIEWS = ['overview', 'operations', 'balance', 'savings', 'lists', 'settings'];
+const VIEWS = ['overview', 'operations', 'balance', 'savings', 'lists', 'phone', 'settings'];
+const PHONE_CHECKS_KEY = 'finance-phone-setup-checks';
 
 function storedView() {
   const hashView = location.hash.slice(1);
@@ -39,6 +40,9 @@ const state = {
   operationNecessity: '',
   operationSort: 'date',
   operationSortDirection: 'desc',
+  updateCheck: null,
+  updateChecking: false,
+  updateInstallQueued: false,
 };
 
 const esc = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
@@ -578,20 +582,112 @@ function renderLists() {
     </form>`;
 }
 
+function readPhoneSetupChecks() {
+  try {
+    const value = JSON.parse(localStorage.getItem(PHONE_CHECKS_KEY) || '{}');
+    return value && typeof value === 'object' ? value : {};
+  } catch { return {}; }
+}
+
+function renderPhoneSetup() {
+  const mobile = state.settings?.mobileLists || { state: 'unavailable', accountCount: 0 };
+  const sync = state.settings?.sync || {};
+  const checks = readPhoneSetupChecks();
+  const checkedCount = ['syncthing', 'vault', 'plugin'].filter((key) => checks[key] === true).length;
+  let statusTitle = 'Справочники ещё не опубликованы';
+  let statusDescription = 'Подготовьте данные для телефона. Это не создаёт финансовую операцию.';
+  let statusClass = 'setup-status-waiting';
+  let nextStep = 'Нажмите «Подготовить данные для телефона», затем дождитесь синхронизации папки.';
+  if (mobile.state === 'ready') {
+    statusTitle = 'На компьютере подготовлены счета';
+    statusDescription = `${mobile.accountCount} активных счетов и справочники записаны в папку Finance Sync.`;
+    statusClass = 'setup-status-ready';
+    nextStep = checkedCount < 2 ? 'Подключите папку Finance Sync на телефоне и добавьте её в хранилище Obsidian.' : 'Откройте форму Finance Capture в Obsidian и проверьте, что в ней видны счета.';
+  } else if (mobile.state === 'no-accounts') {
+    statusTitle = 'Сначала добавьте активный счёт';
+    statusDescription = 'Мобильная форма не включится, пока в книге нет хотя бы одного активного счёта.';
+    statusClass = 'setup-status-waiting';
+    nextStep = 'Добавьте счёт на экране «Баланс», затем вернитесь сюда и подготовьте данные.';
+  } else if (mobile.state === 'invalid') {
+    statusTitle = 'Файл справочников не читается';
+    statusDescription = 'Повторно подготовьте данные. Если сообщение останется, откройте диагностику ниже.';
+    statusClass = 'setup-status-attention';
+    nextStep = 'Нажмите «Подготовить данные для телефона».';
+  } else if (mobile.state === 'unavailable') {
+    statusTitle = 'Не удалось проверить папку синхронизации';
+    statusDescription = 'Проверьте доступ к папке Finance Sync на компьютере.';
+    statusClass = 'setup-status-attention';
+    nextStep = 'Откройте папку синхронизации или раздел диагностики внизу страницы.';
+  }
+  if (sync.lastError || Number(sync.errors) > 0 || Number(sync.cleanupPending) > 0) {
+    statusTitle = 'Синхронизация требует внимания';
+    statusDescription = 'Последняя проверка обнаружила проблему. Desktop-приложение продолжает работать.';
+    statusClass = 'setup-status-attention';
+    nextStep = 'Посмотрите подробности последней проверки и устраните причину; затем подготовьте данные повторно.';
+  }
+  const lastCheck = sync.lastScanAt ? new Date(sync.lastScanAt).toLocaleString('ru-RU') : 'Пока не выполнялась';
+  const updatedAt = mobile.modifiedAt ? new Date(mobile.modifiedAt).toLocaleString('ru-RU') : 'Файл пока не найден';
+  content.innerHTML = `${pageHeader('Подключить телефон', 'Необязательная настройка · desktop работает и без телефона')}
+    <section class="phone-ready-banner"><div><span class="phone-ready-kicker">DESKTOP ГОТОВ</span><h2>Продолжайте вести журнал на компьютере</h2><p>Подключение телефона можно завершить позже. Принятые с телефона операции импортируются в книгу только на этом компьютере.</p></div><div class="phone-banner-actions"><button class="secondary-button" type="button" data-phone-instructions>Открыть инструкцию</button><button class="secondary-button" type="button" data-phone-later>Продолжить позже</button></div></section>
+    <div class="phone-setup-grid">
+      <article class="card phone-status-card ${statusClass}"><div class="card-head"><div><h2>${esc(statusTitle)}</h2><p>${esc(statusDescription)}</p></div></div>
+        <div class="phone-status-meta"><div><span>Последняя проверка на компьютере</span><strong>${esc(lastCheck)}</strong></div><div><span>Следующий шаг</span><strong>${esc(nextStep)}</strong></div></div>
+        <div class="settings-actions settings-actions-wrap"><button class="primary-button" type="button" data-publish-mobile>Подготовить данные для телефона</button><button class="secondary-button" type="button" data-open-folder="sync">Открыть папку Finance Sync</button></div>
+        <p class="phone-safe-note">Подготовка публикует справочники и балансы. Она не обрабатывает очередь операций и не создаёт финансовых записей.</p>
+        <details class="phone-diagnostics"><summary>Показать расположение и диагностику</summary><div><p>Путь папки на компьютере</p><code>${esc(state.settings?.syncDirectory || 'Неизвестно')}</code><p>Справочники изменены</p><strong>${esc(updatedAt)}</strong>${sync.lastError ? `<p>Последняя ошибка</p><strong>${esc(sync.lastError)}</strong>` : ''}</div></details>
+      </article>
+      <article class="card phone-checklist-card"><div class="card-head"><div><h2>Шаги подключения</h2><p>Отметки сохраняются в этом браузере и служат только вашим списком дел.</p></div><span class="tag">${checkedCount} из 3</span></div>
+        <progress class="phone-progress" max="3" value="${checkedCount}" aria-label="Отмечено шагов подключения"></progress>
+        <label class="phone-check"><input type="checkbox" data-phone-check="syncthing" ${checks.syncthing === true ? 'checked' : ''}><span><strong>Syncthing работает на компьютере и телефоне</strong><small>Добавьте устройства и разрешите им синхронизировать одну папку.</small></span></label>
+        <label class="phone-check"><input type="checkbox" data-phone-check="vault" ${checks.vault === true ? 'checked' : ''}><span><strong>Папка Finance Sync появилась внутри хранилища Obsidian</strong><small>Имя общей папки должно быть Finance Sync. На компьютере ей соответствует путь из диагностики.</small></span></label>
+        <label class="phone-check"><input type="checkbox" data-phone-check="plugin" ${checks.plugin === true ? 'checked' : ''}><span><strong>Finance Capture установлен и включён</strong><small>Плагин нужен для создания операций в Obsidian; BRAT доставляет только плагин.</small></span></label>
+      </article>
+    </div>
+    <article class="card phone-guide" id="phone-guide"><div class="card-head"><div><h2>Краткая инструкция</h2><p>Синхронизация переносит файлы, Finance на компьютере записывает принятые операции в Excel.</p></div></div>
+      <div class="phone-guide-steps">
+        <section><span class="phone-guide-number">01</span><div><h3>Подключите Syncthing</h3><ol class="phone-guide-list"><li>Запустите Syncthing на компьютере и телефоне, затем свяжите устройства.</li><li>На компьютере добавьте общую папку с меткой <strong>Finance Sync</strong>, укажите путь из диагностики выше и разрешите доступ телефону.</li><li>На телефоне примите папку и выберите расположение <strong>Finance Sync</strong> внутри хранилища Obsidian.</li></ol><a href="https://docs.syncthing.net/intro/gui.html" target="_blank" rel="noopener">Официальная инструкция Syncthing</a></div></section>
+        <section><span class="phone-guide-number">02</span><div><h3>Установите beta-плагин через BRAT</h3><ol class="phone-guide-list"><li>В Obsidian установите и включите BRAT.</li><li>В BRAT добавьте beta-плагин по идентификатору ниже и установите доступный beta-релиз.</li><li>Включите <strong>Finance Capture</strong>. После синхронизации в форме должны появиться счета.</li></ol><div class="phone-repo-copy"><code>gmdveast/finance-capture</code><button class="secondary-button" type="button" data-copy-repo>Скопировать идентификатор</button></div><a href="https://github.com/TfTHacker/obsidian42-brat" target="_blank" rel="noopener">BRAT на GitHub</a></div></section>
+      </div>
+    </article>`;
+}
+
 function renderSettings() {
   const settings = state.settings;
   const sync = settings.sync || {};
+  const updates = settings.updates || {};
   const settingRow = (label, value) => `<div class="setting-row"><span>${esc(label)}</span><strong title="${esc(value || '—')}">${esc(value || '—')}</strong></div>`;
+  const updateInfo = state.updateCheck;
+  const updateResult = state.updateInstallQueued
+    ? '<p class="update-message">Установщик запущен. Завершите установку в его окне; Finance перезапустится после неё.</p>'
+    : state.updateChecking
+    ? '<p class="update-message">Проверяем опубликованные версии…</p>'
+    : updateInfo?.error
+      ? `<p class="update-message update-error">${esc(updateInfo.error)}</p>`
+      : updateInfo?.enabled === false
+        ? '<p class="update-message">Проверка обновлений доступна в установленной версии Finance.</p>'
+        : updateInfo?.update
+          ? `<p class="update-message">Доступна версия <strong>${esc(updateInfo.update.version)}</strong> (${updateInfo.update.channel === 'beta' ? 'beta' : 'стабильная'}).</p>${updateInfo.update.notes ? `<pre class="update-notes">${esc(updateInfo.update.notes)}</pre>` : ''}<div class="settings-actions settings-actions-wrap"><a class="secondary-button update-release-link" href="${esc(updateInfo.update.url)}" target="_blank" rel="noopener">Описание выпуска</a><button class="primary-button" type="button" data-install-update="${esc(updateInfo.update.version)}">Скачать и установить</button></div>`
+          : updateInfo?.enabled
+            ? '<p class="update-message">Установлена последняя доступная версия для этого канала.</p>'
+            : '<p class="update-message">Проверка выполняется только по запросу. Финансовые данные при этом не отправляются.</p>';
+  const channelLabel = updates.channel === 'beta' ? 'beta: beta и стабильные версии' : updates.channel === 'stable' ? 'стабильный: только стабильные версии' : 'сборка разработчика';
+  const rollbackLabel = updates.rollbackVersion === 'legacy' ? 'предыдущую установленную версию' : `версию ${updates.rollbackVersion || ''}`;
   content.innerHTML = `${pageHeader('Настройки', 'Системные параметры приложения')}
     <div class="settings-grid">
       <article class="card settings-card"><div class="card-head"><div><h2>Excel и резервные копии</h2><p>Текущие локальные пути и состояние хранения</p></div></div>
-        ${settingRow('Рабочая книга', settings.workbookPath)}${settingRow('Последнее изменение', new Date(settings.workbookModifiedAt).toLocaleString('ru-RU'))}${settingRow('Папка бэкапов', settings.backupDirectory)}${settingRow('Бэкапы', `${settings.backupCount} из ${settings.backupLimit}`)}${settingRow('Последний бэкап', settings.latestBackup)}
-        <div class="settings-actions settings-actions-wrap"><button class="secondary-button" type="button" data-open-folder="workbook">Открыть папку Excel</button><button class="secondary-button" type="button" data-open-folder="backups">Открыть бэкапы</button><button class="danger-button" type="button" data-open-restore>Восстановить из бэкапа</button></div>
+        ${settingRow('Папка данных Finance', settings.dataDirectory)}${settingRow('Рабочая книга', settings.workbookPath)}${settingRow('Последнее изменение', new Date(settings.workbookModifiedAt).toLocaleString('ru-RU'))}${settingRow('Папка бэкапов', settings.backupDirectory)}${settingRow('Бэкапы', `${settings.backupCount} из ${settings.backupLimit}`)}${settingRow('Последний бэкап', settings.latestBackup)}
+        <div class="settings-actions settings-actions-wrap"><button class="secondary-button" type="button" data-open-folder="data">Открыть папку данных</button><button class="secondary-button" type="button" data-open-folder="workbook">Открыть папку книги</button><button class="secondary-button" type="button" data-open-folder="backups">Открыть бэкапы</button><button class="danger-button" type="button" data-open-restore>Восстановить из бэкапа</button></div>
       </article>
       <article class="card settings-card settings-sync-card"><div class="card-head"><div><h2>Мобильная синхронизация</h2><p>Обработка на компьютере. Доставку на телефон выполняет Syncthing.</p></div><span class="tag sync-status ${sync.lastError ? 'required' : ''}">${sync.running ? 'Синхронизация…' : sync.lastError ? 'Требует внимания' : sync.lastScanAt ? 'Обработано на компьютере' : 'Ожидает обработки'}</span></div>
         ${settingRow('Папка Syncthing', settings.syncDirectory)}${settingRow('Последняя проверка', sync.lastScanAt ? new Date(sync.lastScanAt).toLocaleString('ru-RU') : 'Ещё не выполнялась')}${settingRow('Импортировано', sync.imported)}${settingRow('Дубликаты', sync.duplicates)}${settingRow('Ошибки', sync.errors)}${settingRow('Хранение квитанций', `${settings.receiptRetentionDays} дней`)}
         ${settingRow('Ожидают удаления', sync.cleanupPending ?? 0)}${sync.lastError ? settingRow('Последняя ошибка', sync.lastError) : ''}
         <div class="settings-actions settings-actions-wrap"><button class="secondary-button" type="button" data-open-folder="sync">Открыть папку Syncthing</button><button class="secondary-button" type="button" data-export-mobile>Обновить данные Obsidian</button></div>
+      </article>
+      <article class="card settings-card settings-update-card"><div class="card-head"><div><h2>Обновление Finance</h2><p>Версии устанавливаются отдельно от книги и пользовательских настроек.</p></div></div>
+        ${settingRow('Текущая версия', updates.version || 'неизвестна')}${settingRow('Канал', channelLabel)}
+        ${updateResult}
+        <div class="settings-actions settings-actions-wrap"><button class="secondary-button" type="button" data-check-update ${state.updateChecking ? 'disabled' : ''}>Проверить обновления</button>${updates.rollbackVersion ? `<button class="danger-button" type="button" data-rollback-version="${esc(updates.rollbackVersion)}">Вернуть ${esc(rollbackLabel)}</button>` : ''}</div>
+        <p class="update-plugin-note">Finance Capture обновляется отдельно: в Obsidian через BRAT запустите обновление beta-плагинов. Эта проверка desktop не меняет версию плагина. <a href="https://github.com/TfTHacker/obsidian42-brat" target="_blank" rel="noopener">BRAT</a> · <a href="https://github.com/gmdveast/finance-capture" target="_blank" rel="noopener">Finance Capture</a>.</p>
       </article>
     </div><article class="card settings-card reset-settings"><h2>Очистка данных</h2>${state.data.syncBlocked ? '<p class="reference-note">Импорт и выдача новых ID заблокированы: после восстановления требуется достоверный реестр синхронизации. Входящие файлы сохраняются.</p>' : ''}<p>Перед очисткой создаётся бэкап Excel. Мобильная очередь и связанные карточки также удаляются. Бэкапы и справочники сохраняются.</p><div class="settings-actions settings-actions-wrap"><button type="button" class="danger-button" data-clear-data="history">Удалить историю</button><button type="button" class="danger-button" data-clear-data="all">Полная очистка</button></div></article>`;
 }
@@ -604,14 +700,14 @@ function render() {
     button.classList.toggle('active', active);
     if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
   });
-  ({ overview: renderOverview, operations: renderOperations, balance: renderBalance, savings: renderSavings, lists: renderLists, settings: renderSettings }[state.view] || renderOverview)();
+  ({ overview: renderOverview, operations: renderOperations, balance: renderBalance, savings: renderSavings, lists: renderLists, phone: renderPhoneSetup, settings: renderSettings }[state.view] || renderOverview)();
 }
 
 function updateTopbarActions() {
   const refresh = document.querySelector('[data-action="refresh-rates"]');
   const addOperation = document.querySelector('[data-action="add-operation"]');
   if (refresh) refresh.hidden = !['balance', 'savings'].includes(state.view);
-  if (addOperation) addOperation.hidden = state.view === 'settings';
+  if (addOperation) addOperation.hidden = ['phone', 'settings'].includes(state.view);
 }
 
 function populateOperationForm(type = 'Расход', savingsTransfer = '') {
@@ -808,18 +904,89 @@ document.addEventListener('click', async (event) => {
     } catch (error) { notify(error.message, 'error'); clearButton.disabled = false; }
     return;
   }
+  const checkUpdateButton = event.target.closest('[data-check-update]');
+  if (checkUpdateButton) {
+    state.updateChecking = true;
+    state.updateCheck = null;
+    renderSettings();
+    try { state.updateCheck = await request('/api/updates/check'); }
+    catch (error) { state.updateCheck = { error: error.message }; }
+    finally { state.updateChecking = false; renderSettings(); }
+    return;
+  }
+  const installUpdateButton = event.target.closest('[data-install-update]');
+  if (installUpdateButton) {
+    const version = installUpdateButton.dataset.installUpdate;
+    if (!confirm(`Установить Finance ${version}? Приложение закроется на время установки и запустится снова после неё. Книга, настройки и очередь синхронизации хранятся отдельно от версии приложения.`)) return;
+    installUpdateButton.disabled = true;
+    installUpdateButton.textContent = 'Загружаю и проверяю…';
+    try {
+      await request('/api/updates/install', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version }) });
+      state.updateInstallQueued = true;
+      renderSettings();
+      notify('Установщик запущен. Подтвердите установку в окне Finance; приложение откроется после завершения.');
+    } catch (error) {
+      notify(error.message, 'error');
+      state.updateCheck = { error: error.message };
+      renderSettings();
+    }
+    return;
+  }
+  const rollbackButton = event.target.closest('[data-rollback-version]');
+  if (rollbackButton) {
+    const version = rollbackButton.dataset.rollbackVersion;
+    const label = version === 'legacy' ? 'предыдущую установленную версию' : `версию ${version}`;
+    if (!confirm(`Вернуть ${label}? Finance штатно завершит текущие операции, переключится на сохранённую версию и перезапустится. Книга и настройки останутся прежними.`)) return;
+    rollbackButton.disabled = true;
+    try {
+      await request('/api/updates/rollback', { method: 'POST' });
+      notify('Finance закрывается и перезапускается на предыдущей версии.');
+    } catch (error) {
+      notify(error.message, 'error');
+      rollbackButton.disabled = false;
+    }
+    return;
+  }
   const viewButton = event.target.closest('[data-view]');
   if (viewButton) {
-    if (viewButton.dataset.view === 'settings') {
+    if (['settings', 'phone'].includes(viewButton.dataset.view)) {
       try { state.settings = await request('/api/settings'); } catch (error) { notify(error.message, 'error'); }
     }
     navigateTo(viewButton.dataset.view);
     return;
   }
+  if (event.target.closest('[data-phone-later]')) { navigateTo('overview'); return; }
+  if (event.target.closest('[data-phone-instructions]')) { document.querySelector('#phone-guide')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+  if (event.target.closest('[data-copy-repo]')) {
+    try { await navigator.clipboard.writeText('gmdveast/finance-capture'); notify('Идентификатор репозитория скопирован.'); }
+    catch { notify('Не удалось скопировать. Выделите идентификатор и скопируйте вручную.', 'error'); }
+    return;
+  }
   if (event.target.closest('[data-action="add-operation"]')) { openOperation(); return; }
   if (event.target.closest('[data-action="close-dialog"]')) { dialog.close(); return; }
+  const publishMobile = event.target.closest('[data-publish-mobile]');
+  if (publishMobile) {
+    const idleLabel = publishMobile.dataset.idleLabel || publishMobile.textContent;
+    publishMobile.dataset.idleLabel = idleLabel;
+    publishMobile.disabled = true;
+    publishMobile.textContent = 'Подготовка…';
+    try {
+      const result = await request('/api/settings/publish-mobile', { method: 'POST' });
+      state.settings = await request('/api/settings');
+      if (state.view === 'phone') renderPhoneSetup();
+      const parts = [];
+      parts.push(result.listsPublished ? 'Справочники готовы для Syncthing.' : 'Не удалось опубликовать справочники.');
+      parts.push(result.balancesPublished ? result.balancesChanged ? 'Балансы обновлены.' : 'Балансы без изменений.' : 'Не удалось обновить балансы.');
+      if (result.warnings?.length) parts.push(result.warnings.join('; '));
+      notify(parts.join(' '), result.ok ? '' : 'error');
+    } catch (error) { notify(error.message, 'error'); }
+    finally { publishMobile.disabled = false; publishMobile.textContent = idleLabel; }
+    return;
+  }
   const exportMobile = event.target.closest('[data-export-mobile]');
   if (exportMobile) {
+    const idleLabel = exportMobile.dataset.idleLabel || exportMobile.textContent;
+    exportMobile.dataset.idleLabel = idleLabel;
     exportMobile.disabled = true;
     exportMobile.textContent = 'Синхронизация…';
     try {
@@ -838,7 +1005,7 @@ document.addEventListener('click', async (event) => {
       if (result.warnings?.length) parts.push(result.warnings.join('; '));
       notify(parts.join(' '), result.ok ? '' : 'error');
     } catch (error) { notify(error.message, 'error'); }
-    finally { exportMobile.disabled = false; exportMobile.textContent = 'Обновить данные Obsidian'; }
+    finally { exportMobile.disabled = false; exportMobile.textContent = idleLabel; }
     return;
   }
   const openFolder = event.target.closest('[data-open-folder]');
@@ -910,6 +1077,19 @@ document.addEventListener('click', async (event) => {
       state.data = result.data; render(); notify(`${removingOperation?.savingsTransfer === 'from-savings' ? 'Перевод удалён, движение средств отменено' : removingOperation?.savingsTransfer === 'investment' ? 'Инвестиция удалена, движение средств отменено' : 'Операция удалена'}. Бэкап: ${result.backup}`);
     } catch (error) { notify(error.message, 'error'); }
   }
+});
+
+document.addEventListener('change', (event) => {
+  const checkbox = event.target.closest('[data-phone-check]');
+  if (!checkbox) return;
+  const checks = readPhoneSetupChecks();
+  checks[checkbox.dataset.phoneCheck] = checkbox.checked;
+  try { localStorage.setItem(PHONE_CHECKS_KEY, JSON.stringify(checks)); } catch {}
+  const checkedCount = ['syncthing', 'vault', 'plugin'].filter((key) => checks[key] === true).length;
+  const progress = content.querySelector('.phone-progress');
+  if (progress) progress.value = checkedCount;
+  const count = content.querySelector('.phone-checklist-card .card-head .tag');
+  if (count) count.textContent = `${checkedCount} из 3`;
 });
 
 document.querySelector('#mobile-menu').addEventListener('click', () => document.querySelector('.sidebar').classList.toggle('open'));
@@ -1180,8 +1360,17 @@ function syncViewFromLocation() {
     state.view = view;
     updateTopbarActions();
     try { localStorage.setItem('finance-view', view); } catch {}
+    if (['settings', 'phone'].includes(view)) request('/api/settings').then((settings) => { state.settings = settings; if (state.view === view) render(); }).catch((error) => notify(error.message, 'error'));
     if (state.data) { render(); refreshIfStale(); }
   }
+}
+
+async function refreshPhoneStatus() {
+  if (state.view !== 'phone' || document.hidden || document.activeElement?.matches('[data-phone-check]')) return;
+  try {
+    state.settings = await request('/api/settings');
+    if (state.view === 'phone') renderPhoneSetup();
+  } catch (error) { notify(error.message, 'error'); }
 }
 
 window.addEventListener('popstate', syncViewFromLocation);
@@ -1191,8 +1380,8 @@ updateTopbarActions();
 
 document.querySelectorAll('.nav-item').forEach((button) => { const active = button.dataset.view === state.view; button.classList.toggle('active', active); if (active) button.setAttribute('aria-current', 'page'); });
 content.tabIndex = -1;
-content.querySelector('.loading-card p').textContent = `Загружаем: ${{ overview: 'Обзор', operations: 'Операции', balance: 'Баланс', savings: 'Накопления', lists: 'Справочники', settings: 'Настройки' }[state.view]}…`;
-setInterval(refreshIfStale, 15000);
+content.querySelector('.loading-card p').textContent = `Загружаем: ${{ overview: 'Обзор', operations: 'Операции', balance: 'Баланс', savings: 'Накопления', lists: 'Справочники', phone: 'Подключение телефона', settings: 'Настройки' }[state.view]}…`;
+setInterval(() => { refreshIfStale(); refreshPhoneStatus(); }, 15000);
 window.addEventListener('focus', refreshIfStale);
 document.addEventListener('visibilitychange', refreshIfStale);
 

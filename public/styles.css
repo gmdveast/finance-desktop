@@ -322,6 +322,56 @@ input[name="destinationAmount"][readonly], #investment-category-label[readonly] 
 .settings-card .settings-actions { margin-top: auto; }
 .settings-grid .settings-card:first-child [data-open-restore] { grid-column: 2; }
 .settings-actions-wrap { align-items: stretch; }
+.update-message { margin: 12px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.update-message.update-error { color: var(--danger, #b63e31); }
+.update-notes { max-height: 180px; overflow: auto; margin: 10px 0 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #f7f8f5; color: var(--ink); font: inherit; font-size: 11px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.update-release-link { display: inline-flex; align-items: center; justify-content: center; padding: 0 12px; color: inherit; text-decoration: none; }
+.update-plugin-note { margin: auto 0 0; padding-top: 16px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.update-plugin-note a { color: var(--forest); font-weight: 700; }
+.phone-ready-banner { display: flex; align-items: center; justify-content: space-between; gap: 22px; margin-bottom: 18px; padding: 24px 28px; border-radius: 18px; background: var(--forest); color: white; }
+.phone-ready-banner h2 { margin: 8px 0; font-size: 18px; }
+.phone-ready-banner p { max-width: 760px; margin: 0; color: #c2cec8; font-size: 12px; line-height: 1.6; }
+.phone-banner-actions { display: grid; gap: 8px; min-width: 190px; }
+.phone-ready-banner .secondary-button { flex: 0 0 auto; }
+.phone-ready-kicker { color: var(--lime); font-size: 10px; font-weight: 800; letter-spacing: .14em; }
+.phone-setup-grid { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(320px, .92fr); gap: 18px; align-items: stretch; }
+.phone-status-card, .phone-checklist-card { min-width: 0; }
+.phone-status-card { border-top: 4px solid #a9b0ab; }
+.phone-status-ready { border-top-color: #4f9877; }
+.phone-status-attention { border-top-color: #c65b4d; }
+.phone-status-waiting { border-top-color: #d2a442; }
+.phone-status-card .card-head { margin-bottom: 18px; }
+.phone-status-card .card-head p, .phone-checklist-card .card-head p, .phone-guide .card-head p { max-width: 680px; margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.phone-status-meta { display: grid; gap: 12px; }
+.phone-status-meta > div { display: grid; gap: 5px; padding: 12px 14px; border-radius: 11px; background: #f5f5ef; }
+.phone-status-meta span { color: var(--muted); font-size: 10px; font-weight: 700; }
+.phone-status-meta strong { font-size: 12px; line-height: 1.55; }
+.phone-status-card .settings-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.phone-safe-note { margin: 12px 0 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
+.phone-diagnostics { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; color: var(--muted); font-size: 11px; }
+.phone-diagnostics summary { cursor: pointer; font-weight: 800; color: var(--ink); }
+.phone-diagnostics > div { padding-top: 9px; }
+.phone-diagnostics p { margin: 10px 0 4px; }
+.phone-diagnostics code, .phone-diagnostics strong { display: block; overflow-wrap: anywhere; color: var(--ink); font-size: 11px; }
+.phone-progress { width: 100%; height: 8px; margin: -4px 0 12px; accent-color: #477e64; }
+.phone-check { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: start; gap: 10px; padding: 13px 0; border-top: 1px solid var(--line); cursor: pointer; }
+.phone-check input { width: 17px; height: 17px; margin: 2px 0 0; accent-color: #477e64; }
+.phone-check strong, .phone-check small { display: block; }
+.phone-check strong { font-size: 12px; line-height: 1.45; }
+.phone-check small { margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.phone-guide { margin-top: 18px; }
+.phone-guide .card-head { margin-bottom: 18px; }
+.phone-guide-steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.phone-guide-steps > section { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px; }
+.phone-guide-number { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px; background: #e9efe8; color: #315646; font-size: 11px; font-weight: 800; }
+.phone-guide-steps h3 { margin: 3px 0 8px; font-size: 14px; }
+.phone-guide-steps p { margin: 0 0 10px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.phone-guide-list { margin: 0 0 10px; padding-left: 18px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.phone-guide-list li + li { margin-top: 6px; }
+.phone-guide-steps a { color: #315f4b; font-size: 11px; font-weight: 800; }
+.phone-repo-copy { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
+.phone-repo-copy code { padding: 8px 10px; border-radius: 8px; background: #f0f1eb; color: var(--ink); font-size: 11px; }
+.phone-repo-copy .secondary-button { padding: 8px 10px; font-size: 10px; }
 .danger-button { border: 0; border-radius: 12px; padding: 12px 18px; background: #a54132; color: white; font-weight: 800; }
 .danger-button:hover { background: #8f3428; }
 .danger-button:disabled { opacity: .55; cursor: wait; }
@@ -362,7 +412,11 @@ input[name="destinationAmount"][readonly], #investment-category-label[readonly] 
   .balance-hero-main { flex-wrap: wrap; }
   .balance-account-count { margin-left: auto; }
   .page-head { align-items: start; flex-direction: column; }
-  .metrics, .list-grid, .settings-grid { grid-template-columns: 1fr; }
+  .metrics, .list-grid, .settings-grid, .phone-setup-grid, .phone-guide-steps { grid-template-columns: 1fr; }
+  .phone-ready-banner { align-items: stretch; flex-direction: column; }
+  .phone-banner-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .phone-ready-banner .secondary-button { width: 100%; }
+  .phone-status-card .settings-actions { grid-template-columns: 1fr; }
   .overview-main .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .savings-card-grid { grid-template-columns: 1fr; }
   .savings-create-form, .savings-transfer-form, .savings-increase-form { grid-template-columns: 1fr; }
@@ -400,4 +454,5 @@ input[name="destinationAmount"][readonly], #investment-category-label[readonly] 
   .balance-hero { padding: 22px 20px; }
   .balance-hero-main { align-items: flex-start; flex-direction: column; gap: 12px; }
   .category-reference-row { grid-template-columns: 58px minmax(0, 1fr) 88px 34px; }
+  .phone-banner-actions { grid-template-columns: 1fr; }
 }
