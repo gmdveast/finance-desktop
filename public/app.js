@@ -8,7 +8,7 @@ dialog.addEventListener('click', (event) => {
 savingsHistoryDialog.addEventListener('click', (event) => {
   if (event.target === savingsHistoryDialog) savingsHistoryDialog.close();
 });
-const toast = document.querySelector('#toast');
+const toastStack = document.querySelector('#toast-stack');
 const restoreDialog = document.querySelector('#restore-dialog');
 const restoreForm = document.querySelector('#restore-form');
 const VIEWS = ['overview', 'operations', 'balance', 'savings', 'lists', 'phone', 'settings'];
@@ -73,10 +73,37 @@ const localIsoDate = () => {
 };
 
 function notify(message, type = '') {
-  toast.textContent = message;
-  toast.className = `toast show ${type}`;
-  clearTimeout(notify.timer);
-  notify.timer = setTimeout(() => { toast.className = 'toast'; }, 3500);
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`.trim();
+  toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+
+  const text = document.createElement('span');
+  text.className = 'toast-message';
+  text.textContent = String(message);
+
+  const close = document.createElement('button');
+  close.className = 'toast-close';
+  close.type = 'button';
+  close.setAttribute('aria-label', 'Закрыть уведомление');
+  close.textContent = '×';
+
+  let dismissed = false;
+  let timer;
+  const dismiss = () => {
+    if (dismissed) return;
+    dismissed = true;
+    clearTimeout(timer);
+    toast.classList.remove('show');
+    toast.classList.add('dismissed');
+    window.setTimeout(() => toast.remove(), 250);
+  };
+
+  close.addEventListener('click', dismiss);
+  toast.append(text, close);
+  toastStack.append(toast);
+  toastStack.scrollTop = toastStack.scrollHeight;
+  window.requestAnimationFrame(() => toast.classList.add('show'));
+  timer = window.setTimeout(dismiss, type === 'error' ? 12000 : 8000);
 }
 
 async function request(url, options) {
@@ -732,18 +759,18 @@ function renderSettings() {
     ? `<p class="recovery-report">SHA-256: <code>${esc(state.recoveryResult.manifest.sha256)}</code><br>Создан: ${esc(new Date(state.recoveryResult.manifest.createdAt).toLocaleString('ru-RU'))} · Книга: ${number(state.recoveryResult.workbookBytes / 1024 / 1024, 1)} МБ</p>`
     : '';
   content.innerHTML = `${pageHeader('Настройки', 'Системные параметры приложения')}
+    <article class="card settings-card settings-recovery-card"><div class="card-head"><div><h2>Копия на другом носителе</h2><p>Создайте ZIP всей книги и проверьте его перед хранением.</p></div></div>
+      <p class="recovery-help">Архив содержит полную финансовую книгу и постоянный реестр синхронизации. ZIP не зашифрован: храните его на защищённом носителе с ограниченным доступом. Выберите другой физический диск. Finance не отправляет архив в интернет.</p>
+      <button class="primary-button" type="button" data-recovery-export ${state.recoveryBusy ? 'disabled' : ''}>${state.recoveryBusy ? 'Подождите…' : 'Создать recovery-архив'}</button>
+      <label class="field recovery-file-label"><span>Выберите ZIP для проверки или репетиции</span><input type="file" accept=".zip,application/zip" data-recovery-file><small>${esc(recoveryFileLabel)} · максимум 256 МБ</small></label>
+      <div class="settings-actions settings-actions-wrap"><button class="secondary-button" type="button" data-recovery-verify ${recoveryButtonsDisabled ? 'disabled' : ''}>Проверить архив</button><button class="secondary-button" type="button" data-recovery-rehearse ${recoveryButtonsDisabled ? 'disabled' : ''}>Проверить восстановление</button></div>
+      <p class="recovery-status" aria-live="polite">${esc(state.recoveryStatus)}</p>${recoveryReport}
+      <p class="recovery-footnote">Репетиция проверяет восстановление во временной новой папке и удаляет её после проверки. Рабочая книга не изменяется.</p>
+    </article>
     <div class="settings-grid">
       <article class="card settings-card"><div class="card-head"><div><h2>Excel и резервные копии</h2><p>Текущие локальные пути и состояние хранения</p></div></div>
         ${settingRow('Папка данных Finance', settings.dataDirectory)}${settingRow('Рабочая книга', settings.workbookPath)}${settingRow('Последнее изменение', new Date(settings.workbookModifiedAt).toLocaleString('ru-RU'))}${settingRow('Папка бэкапов', settings.backupDirectory)}${settingRow('Бэкапы', `${settings.backupCount} из ${settings.backupLimit}`)}${settingRow('Последний бэкап', settings.latestBackup)}
         <div class="settings-actions settings-actions-wrap"><button class="secondary-button" type="button" data-open-folder="data">Открыть папку данных</button><button class="secondary-button" type="button" data-open-folder="workbook">Открыть папку книги</button><button class="secondary-button" type="button" data-open-folder="backups">Открыть бэкапы</button><button class="danger-button" type="button" data-open-restore>Восстановить из бэкапа</button></div>
-      </article>
-      <article class="card settings-card settings-recovery-card"><div class="card-head"><div><h2>Копия на другом носителе</h2><p>Создайте ZIP всей книги и проверьте его перед хранением.</p></div></div>
-        <p class="recovery-help">Архив содержит полную финансовую книгу и постоянный реестр синхронизации. ZIP не зашифрован: храните его на защищённом носителе с ограниченным доступом. Выберите другой физический диск. Finance не отправляет архив в интернет.</p>
-        <button class="primary-button" type="button" data-recovery-export ${state.recoveryBusy ? 'disabled' : ''}>${state.recoveryBusy ? 'Подождите…' : 'Создать recovery-архив'}</button>
-        <label class="field recovery-file-label"><span>Выберите ZIP для проверки или репетиции</span><input type="file" accept=".zip,application/zip" data-recovery-file><small>${esc(recoveryFileLabel)} · максимум 256 МБ</small></label>
-        <div class="settings-actions settings-actions-wrap"><button class="secondary-button" type="button" data-recovery-verify ${recoveryButtonsDisabled ? 'disabled' : ''}>Проверить архив</button><button class="secondary-button" type="button" data-recovery-rehearse ${recoveryButtonsDisabled ? 'disabled' : ''}>Проверить восстановление</button></div>
-        <p class="recovery-status" aria-live="polite">${esc(state.recoveryStatus)}</p>${recoveryReport}
-        <p class="recovery-footnote">Репетиция проверяет восстановление во временной новой папке и удаляет её после проверки. Рабочая книга не изменяется.</p>
       </article>
       <article class="card settings-card settings-sync-card"><div class="card-head"><div><h2>Мобильная синхронизация</h2><p>Обработка на компьютере. Доставку на телефон выполняет Syncthing.</p></div><span class="tag sync-status ${sync.lastError ? 'required' : ''}">${sync.running ? 'Синхронизация…' : sync.lastError ? 'Требует внимания' : sync.lastScanAt ? 'Обработано на компьютере' : 'Ожидает обработки'}</span></div>
         ${settingRow('Папка Syncthing', settings.syncDirectory)}${settingRow('Последняя проверка', sync.lastScanAt ? new Date(sync.lastScanAt).toLocaleString('ru-RU') : 'Ещё не выполнялась')}${settingRow('Импортировано', sync.imported)}${settingRow('Дубликаты', sync.duplicates)}${settingRow('Ошибки', sync.errors)}${settingRow('Хранение квитанций', `${settings.receiptRetentionDays} дней`)}
@@ -756,7 +783,8 @@ function renderSettings() {
         <div class="settings-actions settings-actions-wrap"><button class="secondary-button" type="button" data-check-update ${state.updateChecking ? 'disabled' : ''}>Проверить обновления</button>${updates.rollbackVersion ? `<button class="danger-button" type="button" data-rollback-version="${esc(updates.rollbackVersion)}">Вернуть ${esc(rollbackLabel)}</button>` : ''}</div>
         <p class="update-plugin-note">Finance Capture обновляется отдельно: в Obsidian через BRAT запустите обновление beta-плагинов. Эта проверка desktop не меняет версию плагина. <a href="https://github.com/TfTHacker/obsidian42-brat" target="_blank" rel="noopener">BRAT</a> · <a href="https://github.com/gmdveast/finance-capture" target="_blank" rel="noopener">Finance Capture</a>.</p>
       </article>
-    </div><article class="card settings-card reset-settings"><h2>Очистка данных</h2>${state.data.syncBlocked ? '<p class="reference-note">Импорт и выдача новых ID заблокированы: после восстановления требуется достоверный реестр синхронизации. Входящие файлы сохраняются.</p>' : ''}<p>Перед очисткой создаётся бэкап Excel. Мобильная очередь и связанные карточки также удаляются. Бэкапы и справочники сохраняются.</p><div class="settings-actions settings-actions-wrap"><button type="button" class="danger-button" data-clear-data="history">Удалить историю</button><button type="button" class="danger-button" data-clear-data="all">Полная очистка</button></div></article>`;
+      <article class="card settings-card reset-settings"><h2>Очистка данных</h2>${state.data.syncBlocked ? '<p class="reference-note">Импорт и выдача новых ID заблокированы: после восстановления требуется достоверный реестр синхронизации. Входящие файлы сохраняются.</p>' : ''}<p>Перед очисткой создаётся бэкап Excel. Мобильная очередь и связанные карточки также удаляются. Бэкапы и справочники сохраняются.</p><div class="settings-actions settings-actions-wrap"><button type="button" class="danger-button" data-clear-data="history">Удалить историю</button><button type="button" class="danger-button" data-clear-data="all">Полная очистка</button></div></article>
+    </div>`;
 }
 
 function render() {

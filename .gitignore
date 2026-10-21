@@ -4,7 +4,6 @@ node_modules/
 /mobile-sync/
 /docs/
 /AGENTS.md
-/PLAN.txt
 /finance.config.json
 /config/
 *.xls

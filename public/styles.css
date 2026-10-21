@@ -296,7 +296,8 @@ tbody tr:hover { background: #fbfaf4; }
 .account-row-actions { flex-wrap: wrap; }
 .account-name-cell { position: relative; padding-left: 34px; }
 .account-drag-handle { position: absolute; left: 4px; top: 50%; transform: translateY(-50%); border: 0; background: transparent; cursor: grab; font-size: 24px; color: var(--muted); }
-.currency-comparison, .reset-settings { margin-top: 24px; padding: 22px; }
+.currency-comparison, .reset-settings { padding: 22px; }
+.currency-comparison { margin-top: 24px; }
 .currency-comparison p, .reset-settings p { color: var(--muted); line-height: 1.6; }
 .currency-comparison tfoot { font-weight: 800; }
 .rate-panel[hidden] { display: none; }
@@ -314,7 +315,7 @@ input[name="destinationAmount"][readonly], #investment-category-label[readonly] 
 .settings-sync-card > .card-head { padding-right: 170px; }
 .settings-sync-card > .card-head > .sync-status { position: absolute; top: 22px; right: 22px; }
 .settings-card .setting-row { border-bottom: 0; }
-.settings-recovery-card { grid-column: 1 / -1; gap: 12px; }
+.settings-recovery-card { gap: 12px; margin-bottom: 18px; }
 .recovery-help, .recovery-footnote { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .recovery-file-label { max-width: 620px; }
 .recovery-file-label input { min-width: 0; width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); }
@@ -397,9 +398,15 @@ input[name="destinationAmount"][readonly], #investment-category-label[readonly] 
 .rate-panel small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
 .check { font-size: 10px; color: var(--muted); display: flex; align-items: center; gap: 5px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
-.toast { position: fixed; right: 24px; bottom: 24px; max-width: 380px; background: var(--forest); color: white; padding: 14px 18px; border-radius: 12px; box-shadow: var(--shadow); font-size: 12px; transform: translateY(120px); opacity: 0; transition: .25s; z-index: 50; }
+.toast-stack { position: fixed; right: 24px; bottom: 24px; z-index: 100; display: flex; flex-direction: column; gap: 10px; width: min(420px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; pointer-events: none; }
+.toast { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: start; gap: 12px; box-sizing: border-box; width: 100%; max-width: 420px; padding: 14px 14px 14px 18px; border-radius: 12px; background: var(--forest); color: white; box-shadow: var(--shadow); font-size: 12px; opacity: 0; transform: translateY(12px); transition: opacity .22s ease, transform .22s ease; pointer-events: auto; }
 .toast.show { transform: translateY(0); opacity: 1; }
+.toast.dismissed { transform: translateY(8px); opacity: 0; }
 .toast.error { background: #9e3d30; }
+.toast-message { min-width: 0; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.toast-close { width: 28px; height: 28px; margin: -4px -4px 0 0; padding: 0; border: 0; border-radius: 8px; background: rgba(255,255,255,.12); color: inherit; font: inherit; font-size: 20px; line-height: 1; cursor: pointer; }
+.toast-close:hover { background: rgba(255,255,255,.22); }
+.toast-close:focus-visible { outline: 2px solid white; outline-offset: 2px; }
 .loading-card { min-height: 60vh; display: grid; place-items: center; align-content: center; gap: 12px; color: var(--muted); }
 .loader { width: 28px; height: 28px; border: 3px solid #d8d8d0; border-top-color: var(--forest); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -418,6 +425,7 @@ input[name="destinationAmount"][readonly], #investment-category-label[readonly] 
   .topbar { height: 72px; }
   .topbar-actions { margin-left: auto; gap: 7px; }
   .content { padding-top: 28px; }
+  .toast-stack { right: 14px; bottom: 14px; width: calc(100vw - 28px); max-height: calc(100vh - 28px); }
   .balance-hero { align-items: flex-start; flex-wrap: wrap; }
   .balance-hero-main { flex-wrap: wrap; }
   .balance-account-count { margin-left: auto; }
