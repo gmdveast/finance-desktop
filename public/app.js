@@ -643,14 +643,37 @@ async function updateAccountRate(row) {
   }
 }
 
+const REFERENCE_MOVE_LABELS = { categories: 'категорию', currencies: 'валюту', necessities: 'значение необходимости' };
+
+function referenceMoveButtons(name, index, total) {
+  const label = REFERENCE_MOVE_LABELS[name];
+  return `<button type="button" class="reference-move" data-move-reference="up" title="Переместить выше" aria-label="Переместить ${label} выше" ${index === 0 ? 'disabled' : ''}>↑</button><button type="button" class="reference-move" data-move-reference="down" title="Переместить ниже" aria-label="Переместить ${label} ниже" ${index === total - 1 ? 'disabled' : ''}>↓</button>`;
+}
+
+function referenceStringRow(name, item, index, total, placeholder = '') {
+  return `<div class="reference-row"><input value="${esc(item)}" required ${placeholder ? `placeholder="${esc(placeholder)}"` : ''}><div class="reference-row-actions">${referenceMoveButtons(name, index, total)}<button type="button" class="reference-remove" data-remove-reference title="Удалить" aria-label="Удалить строку справочника">×</button></div></div>`;
+}
+
+function referenceCategoryRow(item, index, total) {
+  return `<div class="reference-row category-reference-row"><input class="category-emoji-input" value="${esc(item.emoji || '')}" maxlength="16" aria-label="Эмодзи категории" placeholder="📌"><input class="category-name-input" value="${esc(item.name || '')}" required aria-label="Название категории" placeholder="Название категории"><select aria-label="Тип категории"><option ${item.type !== 'Доход' ? 'selected' : ''}>Расход</option><option ${item.type === 'Доход' ? 'selected' : ''}>Доход</option></select><div class="reference-row-actions">${referenceMoveButtons('categories', index, total)}<button type="button" class="reference-remove" data-remove-reference title="Удалить" aria-label="Удалить строку справочника">×</button></div></div>`;
+}
+
+function refreshReferenceMoveButtons(rows) {
+  const items = [...rows.querySelectorAll(':scope > .reference-row')];
+  items.forEach((row, index) => {
+    row.querySelector('[data-move-reference="up"]').disabled = index === 0;
+    row.querySelector('[data-move-reference="down"]').disabled = index === items.length - 1;
+  });
+}
+
 function renderLists() {
   const { categories, currencies, necessities, operationTypes, investmentCategories } = state.data.lists;
-  const stringRows = (name, items) => `<div class="reference-rows" data-reference-list="${name}">${items.map((item) => `<div class="reference-row"><input value="${esc(item)}" required><button type="button" class="reference-remove" data-remove-reference title="Удалить">×</button></div>`).join('')}</div>`;
+  const stringRows = (name, items) => `<div class="reference-rows" data-reference-list="${name}">${items.map((item, index) => referenceStringRow(name, item, index, items.length)).join('')}</div>`;
   content.innerHTML = `${pageHeader('Справочники', 'Редактирование листа «Списки» и мобильного меню')}
     <form id="lists-form">
       <div class="reference-grid">
         <article class="card reference-card reference-wide"><div class="card-head"><div><h2>Категории</h2><p>Эмодзи, название и тип операции</p></div><span>${categories.length}</span></div>
-          <div class="reference-rows" data-reference-list="categories">${categories.map((item) => `<div class="reference-row category-reference-row"><input class="category-emoji-input" value="${esc(item.emoji)}" maxlength="16" aria-label="Эмодзи категории" placeholder="📌"><input class="category-name-input" value="${esc(item.name)}" required aria-label="Название категории"><select aria-label="Тип категории"><option ${item.type === 'Расход' ? 'selected' : ''}>Расход</option><option ${item.type === 'Доход' ? 'selected' : ''}>Доход</option></select><button type="button" class="reference-remove" data-remove-reference title="Удалить">×</button></div>`).join('')}</div>
+          <div class="reference-rows" data-reference-list="categories">${categories.map((item, index) => referenceCategoryRow(item, index, categories.length)).join('')}</div>
           <button type="button" class="reference-add" data-add-reference="categories">+ Добавить категорию</button></article>
         <article class="card reference-card"><div class="card-head"><div><h2>Валюты</h2><p>Трёхбуквенные коды ЦБ РФ; RUB обязательна</p></div><span>${currencies.length}</span></div>${stringRows('currencies', currencies)}<button type="button" class="reference-add" data-add-reference="currencies">+ Добавить валюту</button></article>
         <article class="card reference-card"><div class="card-head"><div><h2>Необходимость</h2><p>Метки расходов</p></div><span>${necessities.length}</span></div>${stringRows('necessities', necessities)}<button type="button" class="reference-add" data-add-reference="necessities">+ Добавить значение</button></article>
@@ -1189,15 +1212,37 @@ document.addEventListener('click', async (event) => {
   if (addReference) {
     const name = addReference.dataset.addReference;
     const rows = content.querySelector(`[data-reference-list="${name}"]`);
+    const total = rows.querySelectorAll(':scope > .reference-row').length + 1;
     const row = name === 'categories'
-      ? '<div class="reference-row category-reference-row"><input class="category-emoji-input" value="📌" maxlength="16" aria-label="Эмодзи категории"><input class="category-name-input" value="" required placeholder="Название категории" aria-label="Название категории"><select aria-label="Тип категории"><option>Расход</option><option>Доход</option></select><button type="button" class="reference-remove" data-remove-reference title="Удалить">×</button></div>'
-      : `<div class="reference-row"><input value="" required placeholder="${name === 'currencies' ? 'Код, например USD' : 'Новое значение'}"><button type="button" class="reference-remove" data-remove-reference title="Удалить">×</button></div>`;
+      ? referenceCategoryRow({ name: '', emoji: '📌', type: 'Расход' }, total - 1, total)
+      : referenceStringRow(name, '', total - 1, total, name === 'currencies' ? 'Код, например USD' : 'Новое значение');
     rows.insertAdjacentHTML('beforeend', row);
+    refreshReferenceMoveButtons(rows);
     rows.lastElementChild.querySelector(name === 'categories' ? '.category-name-input' : 'input').focus();
     return;
   }
+  const moveReference = event.target.closest('[data-move-reference]');
+  if (moveReference) {
+    const row = moveReference.closest('.reference-row');
+    const rows = row?.parentElement;
+    const direction = moveReference.dataset.moveReference;
+    const sibling = direction === 'up' ? row?.previousElementSibling : row?.nextElementSibling;
+    if (!row || !rows || !sibling || moveReference.disabled) return;
+    if (direction === 'up') rows.insertBefore(row, sibling);
+    else rows.insertBefore(sibling, row);
+    refreshReferenceMoveButtons(rows);
+    const focusDirection = direction === 'up' ? 'down' : 'up';
+    const nextControl = row.querySelector(`[data-move-reference="${focusDirection}"]:not(:disabled)`) || row.querySelector('[data-move-reference]:not(:disabled)') || row.querySelector('input');
+    nextControl?.focus();
+    return;
+  }
   const removeReference = event.target.closest('[data-remove-reference]');
-  if (removeReference) { removeReference.closest('.reference-row').remove(); return; }
+  if (removeReference) {
+    const row = removeReference.closest('.reference-row');
+    const rows = row.parentElement;
+    row.remove(); refreshReferenceMoveButtons(rows);
+    return;
+  }
   const addAccount = event.target.closest('[data-add-account]');
   if (addAccount) {
     const body = content.querySelector('.accounts-table tbody');

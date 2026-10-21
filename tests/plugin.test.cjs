@@ -301,9 +301,9 @@ test('Obsidian-плагин создаёт панель и связанную re
     const payload = {
       schema: 1,
       lists: {
-        categories: [{ name: 'Еда с телефона', type: 'Расход', emoji: '🍜' }, { name: 'Премия', type: 'Доход', emoji: '🎉' }],
+        categories: [{ name: 'Еда с телефона', type: 'Расход', emoji: '🍜' }, { name: 'Транспорт', type: 'Расход', emoji: '🚕' }, { name: 'Премия', type: 'Доход', emoji: '🎉' }],
         currencies: ['RUB', 'JPY'],
-        necessities: ['Важно'],
+        necessities: ['Важно', 'Можно'],
         operationTypes: ['Расход', 'Доход', 'Перевод'],
         accounts: [{ id: 5, name: 'Основная карта', currency: 'RUB', startDate: '2026-10-01' }],
       },
@@ -312,7 +312,8 @@ test('Obsidian-плагин создаёт панель и связанную re
     const listsPlugin = new PluginClass({ vault: listsVault });
     await listsPlugin.onload();
     assert.deepEqual(listsPlugin.captureLists.currencies, ['RUB', 'JPY']);
-    assert.deepEqual(listsPlugin.captureLists.categories.Расход, ['Еда с телефона']);
+    assert.deepEqual(listsPlugin.captureLists.categories.Расход, ['Еда с телефона', 'Транспорт']);
+    assert.deepEqual(listsPlugin.captureLists.necessities, ['Важно', 'Можно']);
     assert.equal(listsPlugin.captureLists.categoryEmojis['Еда с телефона'], '🍜');
     assert.deepEqual(listsPlugin.captureLists.accounts, [{ id: 5, name: 'Основная карта', currency: 'RUB' }]);
     assert.ok(listsPlugin.captureLists.operationTypes.includes('Перевод'));
@@ -320,12 +321,16 @@ test('Obsidian-плагин создаёт панель и связанную re
     assert.match(syncedCard.recordPath, /🍜 Еда с телефона/);
     let refreshedForms = 0;
     listsPlugin.captureFormRefreshers.add(() => { refreshedForms += 1; });
-    payload.lists.currencies = ['RUB', 'CNY'];
+    payload.lists.currencies = ['JPY', 'RUB'];
+    payload.lists.necessities = ['Можно', 'Важно'];
     payload.lists.accounts.push({ id: 6, name: 'Наличные', currency: 'RUB' });
-    payload.lists.categories[0].emoji = '🍱';
+    payload.lists.categories = [payload.lists.categories[1], payload.lists.categories[0], payload.lists.categories[2]];
+    payload.lists.categories[1].emoji = '🍱';
     listsVault.files.get('Finance Sync/config/lists.json').content = JSON.stringify(payload);
     await listsPlugin.onListsFileChanged('Finance Sync/config/lists.json');
-    assert.deepEqual(listsPlugin.captureLists.currencies, ['RUB', 'CNY']);
+    assert.deepEqual(listsPlugin.captureLists.currencies, ['JPY', 'RUB']);
+    assert.deepEqual(listsPlugin.captureLists.necessities, ['Можно', 'Важно']);
+    assert.deepEqual(listsPlugin.captureLists.categories.Расход, ['Транспорт', 'Еда с телефона']);
     assert.equal(listsPlugin.captureLists.accounts.length, 2);
     assert.equal(refreshedForms, 1);
     assert.equal(listsPlugin.captureLists.categoryEmojis['Еда с телефона'], '🍱');

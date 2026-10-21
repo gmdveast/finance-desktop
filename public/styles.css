@@ -251,12 +251,16 @@ tbody tr:hover { background: #fbfaf4; }
 .reference-card .card-head { margin-bottom: 14px; }
 .reference-card .card-head p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
 .reference-rows { display: grid; gap: 8px; }
-.reference-row { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 8px; }
-.category-reference-row { grid-template-columns: 68px minmax(0, 1fr) 120px 34px; }
+.reference-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.category-reference-row { grid-template-columns: 68px minmax(0, 1fr) 120px auto; }
+.reference-row-actions { display: flex; align-items: stretch; gap: 4px; }
+.reference-move { width: 30px; min-width: 30px; border: 1px solid var(--line); border-radius: 9px; background: #fbfaf5; color: var(--ink); font-size: 14px; font-weight: 700; }
+.reference-move:hover:not(:disabled) { background: #edf1e9; }
+.reference-move:disabled { opacity: .38; cursor: default; }
 .category-emoji-input { text-align: center; font-size: 18px; }
 .reference-row input, .reference-row select { min-width: 0; width: 100%; border: 1px solid var(--line); background: #fbfaf5; border-radius: 9px; padding: 9px 10px; outline: none; }
 .reference-row input:focus, .reference-row select:focus { border-color: #809087; box-shadow: 0 0 0 3px rgba(70,96,83,.08); }
-.reference-remove { border: 0; border-radius: 9px; background: #f4e9e5; color: #a84c31; font-size: 18px; }
+.reference-remove { width: 30px; min-width: 30px; border: 0; border-radius: 9px; background: #f4e9e5; color: #a84c31; font-size: 18px; }
 .reference-remove:hover { background: #f0d8d0; }
 .reference-add { margin-top: 10px; padding: 7px 0; border: 0; background: transparent; color: #356d86; font-size: 11px; font-weight: 800; }
 .reference-note { margin: 14px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
@@ -471,6 +475,6 @@ input[name="destinationAmount"][readonly], #investment-category-label[readonly] 
   .topbar-actions .mobile-label { display: inline; }
   .balance-hero { padding: 22px 20px; }
   .balance-hero-main { align-items: flex-start; flex-direction: column; gap: 12px; }
-  .category-reference-row { grid-template-columns: 58px minmax(0, 1fr) 88px 34px; }
+  .category-reference-row { grid-template-columns: 50px minmax(0, 1fr) 76px auto; gap: 6px; }
   .phone-banner-actions { grid-template-columns: 1fr; }
 }

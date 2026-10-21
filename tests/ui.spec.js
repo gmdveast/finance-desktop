@@ -39,6 +39,43 @@ scenario('настройки отдельно показывают обновл�
   await expect(page.getByRole('button', { name: 'Скачать и установить' })).toBeVisible();
 });
 
+scenario('порядок категорий, валют и необходимости сохраняется и применяется в формах', async ({ page, request }) => {
+  const initial = await (await request.get('/api/data')).json();
+  await page.goto('/#lists');
+
+  const categoryRows = page.locator('[data-reference-list="categories"] > .reference-row');
+  const currencyRows = page.locator('[data-reference-list="currencies"] > .reference-row');
+  const necessityRows = page.locator('[data-reference-list="necessities"] > .reference-row');
+  const categoryNames = await categoryRows.locator('.category-name-input').evaluateAll((inputs) => inputs.map((input) => input.value));
+  const currencyNames = await currencyRows.locator('input').evaluateAll((inputs) => inputs.map((input) => input.value));
+  const necessityNames = await necessityRows.locator('input').evaluateAll((inputs) => inputs.map((input) => input.value));
+
+  await categoryRows.nth(0).getByRole('button', { name: 'Переместить категорию ниже' }).click();
+  await currencyRows.nth(0).getByRole('button', { name: 'Переместить валюту ниже' }).click();
+  await necessityRows.nth(0).getByRole('button', { name: 'Переместить значение необходимости ниже' }).click();
+  expect(await categoryRows.locator('.category-name-input').evaluateAll((inputs) => inputs.map((input) => input.value))).toEqual([categoryNames[1], categoryNames[0], ...categoryNames.slice(2)]);
+  expect(await currencyRows.locator('input').evaluateAll((inputs) => inputs.map((input) => input.value))).toEqual([currencyNames[1], currencyNames[0], ...currencyNames.slice(2)]);
+  expect(await necessityRows.locator('input').evaluateAll((inputs) => inputs.map((input) => input.value))).toEqual([necessityNames[1], necessityNames[0], ...necessityNames.slice(2)]);
+  await expect(categoryRows.first().getByRole('button', { name: 'Переместить категорию выше' })).toBeDisabled();
+
+  const listsResponse = page.waitForResponse((response) => response.url().endsWith('/api/lists') && response.request().method() === 'PUT');
+  await page.getByRole('button', { name: 'Сохранить справочники' }).click();
+  const saved = await (await listsResponse).json();
+  const movedCategories = [initial.lists.categories[1], initial.lists.categories[0], ...initial.lists.categories.slice(2)];
+  const movedCurrencies = [initial.lists.currencies[1], initial.lists.currencies[0], ...initial.lists.currencies.slice(2)];
+  const movedNecessities = [initial.lists.necessities[1], initial.lists.necessities[0], ...initial.lists.necessities.slice(2)];
+  expect(saved.data.lists.categories.slice(0, movedCategories.length).map((item) => item.name)).toEqual(movedCategories.map((item) => item.name));
+  expect(saved.data.lists.currencies).toEqual(movedCurrencies);
+  expect(saved.data.lists.necessities).toEqual(movedNecessities);
+
+  await page.getByRole('button', { name: /Новая операция/ }).click();
+  const form = page.locator('#operation-dialog');
+  const expenseOrder = movedCategories.filter((item) => item.type === 'Расход').map((item) => item.name);
+  expect(await form.locator('select[name="category"] option').evaluateAll((options) => options.map((option) => option.value))).toEqual(expenseOrder);
+  expect(await form.locator('select[name="currency"] option').evaluateAll((options) => options.map((option) => option.value))).toEqual(movedCurrencies);
+  expect(await form.locator('select[name="necessity"] option').evaluateAll((options) => options.map((option) => option.value))).toEqual(movedNecessities);
+});
+
 scenario('audit: вкладка накоплений предлагает только вывод и синхронизирует суммы одной валюты', async ({ page, request }) => {
   const data = await (await request.get('/api/data')).json();
   const main = data.accounts[0];
@@ -200,7 +237,7 @@ scenario('подключение телефона необязательно и 
   const publishResponse = page.waitForResponse((response) => response.url().endsWith('/api/settings/publish-mobile') && response.request().method() === 'POST');
   await page.getByRole('button', { name: 'Подготовить данные для телефона' }).click();
   expect((await publishResponse).ok()).toBeTruthy();
-  await expect(page.locator('#toast')).toContainText('Справочники готовы для Syncthing');
+  await expect(page.locator('#toast-stack')).toContainText('Справочники готовы для Syncthing');
 
   await page.locator('[data-phone-check="syncthing"]').check();
   await expect(page.locator('.phone-checklist-card .tag')).toHaveText('1 из 3');
@@ -219,9 +256,9 @@ scenario('старый сервер требует перезапуска вме
   await page.goto('/#settings');
   const button = page.getByRole('button', { name: 'Обновить данные Obsidian' });
   await button.click();
-  await expect(page.locator('#toast')).toContainText('Перезапустите desktop-приложение');
-  await expect(page.locator('#toast')).not.toContainText('undefined');
-  await expect(page.locator('#toast')).not.toContainText('Не удалось опубликовать балансы');
+  await expect(page.locator('#toast-stack')).toContainText('Перезапустите desktop-приложение');
+  await expect(page.locator('#toast-stack')).not.toContainText('undefined');
+  await expect(page.locator('#toast-stack')).not.toContainText('Не удалось опубликовать балансы');
   await expect(button).toBeEnabled();
 });
 
@@ -243,8 +280,8 @@ scenario('кнопка Obsidian импортирует очередь, обно�
   expect(result.imported).toBe(1);
   expect(result.changed).toBe(false);
   expect(result.balancesChanged).toBe(true);
-  await expect(page.locator('#toast')).toContainText('Балансы обновлены');
-  await expect(page.locator('#toast')).toContainText('Импортировано: 1');
+  await expect(page.locator('#toast-stack')).toContainText('Балансы обновлены');
+  await expect(page.locator('#toast-stack')).toContainText('Импортировано: 1');
   await expect.poll(() => readFile(source).then(() => true, () => false)).toBe(false);
   const receipt = JSON.parse(await readFile(path.join(root, 'receipts', `${id}.json`), 'utf8'));
   expect(receipt.sourceDeleted).toBe(true);
@@ -1007,7 +1044,7 @@ scenario('identity: подтверждённый сброс сохраняет �
   const kept = await (await history).json();
   expect(kept.data.savingsAccounts[0].calculatedBalance).toBe(200);
   expect(kept.data.accounts[0].calculatedBalance).toBe(100);
-  await expect(page.locator('#toast')).toContainText('Данные очищены');
+  await expect(page.locator('#toast-stack')).toContainText('Данные очищены');
   page.once('dialog', async (dialog) => {
     expect(dialog.message()).toContain('оба вида счетов');
     await dialog.accept('ПОЛНАЯ ОЧИСТКА');
@@ -1025,7 +1062,7 @@ scenario('повторяемая ошибка синхронизации ото�
   await page.goto('/#settings');
   const button = page.getByRole('button', { name: 'Обновить данные Obsidian' });
   await button.click();
-  await expect(page.locator('#toast')).toContainText('Можно повторить после устранения причины');
+  await expect(page.locator('#toast-stack')).toContainText('Можно повторить после устранения причины');
   await expect(button).toBeEnabled();
 });
 
@@ -1048,7 +1085,7 @@ scenario('lifecycle: failed day refresh remains stale and retries from another s
   let fail = true;
   await page.route('**/api/data', (route) => route.fulfill(fail ? { status: 503, json: { error: 'Temporary', retryable: true } } : { json: { ...data, asOfDate: nextDay } }));
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect(page.locator('#toast')).toContainText('Temporary');
+  await expect(page.locator('#toast-stack')).toContainText('Temporary');
   await expect(page.locator('#workbook-name')).toHaveAttribute('data-as-of-date', data.asOfDate);
   fail = false;
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));

@@ -944,29 +944,40 @@ function defineScenarios(context, scenario) {
     assert.equal(unknownCurrency.response.status, 400);
     assert.equal(unknownCurrency.payload.error, 'Валюта «ZZZ» отсутствует в справочнике ЦБ РФ.');
     assert.ok((await readdir(backups)).length === 0);
+    const originalData = (await jsonRequest(baseUrl, '/api/data')).payload;
     const updated = await jsonRequest(baseUrl, '/api/lists', {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         categories: [
-          { name: 'Продукты', type: 'Расход', emoji: '🛒' },
-          { name: 'Новая категория', type: 'Расход', emoji: '🧪' },
           { name: 'Работа / зарплата', type: 'Доход', emoji: '💼' },
+          { name: 'Новая категория', type: 'Расход', emoji: '🧪' },
+          { name: 'Продукты', type: 'Расход', emoji: '🛒' },
         ],
-        currencies: ['RUB', 'USD', 'GEL', 'JPY'],
+        currencies: ['RUB', 'GEL', 'USD', 'JPY'],
         paymentMethods: ['Наличные', 'Банковская карта', 'QR-код'],
-        necessities: ['Обязательная', 'Гибкая'],
+        necessities: ['Гибкая', 'Обязательная'],
       }),
     });
     assert.equal(updated.response.status, 200);
     assert.ok(updated.payload.data.lists.categories.some((item) => item.name === 'Новая категория'));
     assert.equal(updated.payload.data.lists.categories.find((item) => item.name === 'Новая категория').emoji, '🧪');
-    assert.deepEqual(updated.payload.data.lists.currencies, ['RUB', 'USD', 'GEL', 'JPY']);
+    assert.deepEqual(updated.payload.data.lists.categories.slice(0, 3).map((item) => item.name), ['Работа / зарплата', 'Новая категория', 'Продукты']);
+    assert.deepEqual(updated.payload.data.lists.currencies, ['RUB', 'GEL', 'USD', 'JPY']);
+    assert.deepEqual(updated.payload.data.lists.necessities, ['Гибкая', 'Обязательная']);
+    assert.deepEqual(updated.payload.data.operations, originalData.operations);
     assert.ok((await readdir(backups)).length === 1);
 
     const synced = JSON.parse(await readFile(path.join(sandbox, 'default-sync', 'config', 'lists.json'), 'utf8'));
     assert.equal(synced.lists.paymentMethods, undefined);
     assert.equal(synced.lists.categories.find((item) => item.name === 'Новая категория').emoji, '🧪');
+    assert.deepEqual(synced.lists.categories.map((item) => item.name), ['Работа / зарплата', 'Новая категория', 'Продукты']);
+    assert.deepEqual(synced.lists.currencies, ['RUB', 'GEL', 'USD', 'JPY']);
+    assert.deepEqual(synced.lists.necessities, ['Гибкая', 'Обязательная']);
     const excel = await loadWorkbook();
+    const listSheet = excel.getWorksheet('Списки');
+    assert.deepEqual([2, 3, 4].map((row) => listSheet.getCell(row, 1).value), ['Работа / зарплата', 'Новая категория', 'Продукты']);
+    assert.deepEqual([2, 3, 4, 5].map((row) => listSheet.getCell(row, 4).value), ['RUB', 'GEL', 'USD', 'JPY']);
+    assert.deepEqual([2, 3].map((row) => listSheet.getCell(row, 8).value), ['Гибкая', 'Обязательная']);
     const formulaRanges = Array.from(excel.getWorksheet('Операции').document.getElementsByTagNameNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'formula1')).map((node) => node.textContent);
     assert.ok(formulaRanges.some((value) => value.includes('$A$2:$A$6')));
     assert.ok(formulaRanges.some((value) => value.includes('$D$2:$D$5')));
