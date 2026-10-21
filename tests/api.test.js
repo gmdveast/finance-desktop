@@ -146,6 +146,42 @@ function defineScenarios(context, scenario) {
     assert.equal(rollback.payload.code, 'ROLLBACK_UNAVAILABLE');
   });
 
+  scenario('создаёт, проверяет и репетирует recovery-архив без записи в рабочую книгу', async () => {
+    const originalHash = await sha256(workbook);
+    const originalBackups = await readdir(backups);
+    const exported = await fetch(`${baseUrl}/api/settings/recovery/export`);
+    assert.equal(exported.status, 200);
+    assert.match(exported.headers.get('content-type') || '', /application\/zip/u);
+    assert.match(exported.headers.get('content-disposition') || '', /attachment; filename=/u);
+    const archive = Buffer.from(await exported.arrayBuffer());
+    assert.ok(archive.length > 0);
+    const verifyResponse = await fetch(`${baseUrl}/api/settings/recovery/verify`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: archive,
+    });
+    const verified = await verifyResponse.json();
+    assert.equal(verifyResponse.status, 200, JSON.stringify(verified));
+    assert.equal(verified.valid, true);
+    assert.equal(verified.manifest.sha256, originalHash);
+    assert.equal(verified.workbookBytes > 0, true);
+
+    const rehearseResponse = await fetch(`${baseUrl}/api/settings/recovery/rehearse`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: archive,
+    });
+    const rehearsed = await rehearseResponse.json();
+    assert.equal(rehearseResponse.status, 200, JSON.stringify(rehearsed));
+    assert.equal(rehearsed.rehearsed, true);
+    assert.equal(rehearsed.manifest.sha256, originalHash);
+
+    const invalidResponse = await fetch(`${baseUrl}/api/settings/recovery/verify`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: Buffer.from('not a zip'),
+    });
+    const invalid = await invalidResponse.json();
+    assert.equal(invalidResponse.status, 400);
+    assert.equal(invalid.code, 'RECOVERY_INVALID');
+    assert.equal(await sha256(workbook), originalHash);
+    assert.deepEqual(await readdir(backups), originalBackups);
+  });
+
   scenario('добавляет эмодзи существующим категориям один раз', async () => {
     const excel = await loadWorkbook();
     const first = migrateCategoryEmojis(excel);

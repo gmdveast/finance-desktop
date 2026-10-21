@@ -1,17 +1,21 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { InputError, object, textField, calendarDate, timestamp, numberField, rateField, rowId, localHttpBoundary, publicError, createDiagnostics } from './lib/input-boundary.mjs';
+import { createWriteStream } from 'node:fs';
 import express from 'express';
 import { readIdentity, saveIdentity, mergeIdentity, assertIdentityAvailable } from './lib/identity-state.mjs';
 import JSZip from 'jszip';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { createHash, randomUUID } from 'node:crypto';
 import { watch } from 'node:fs';
-import { lstat, mkdir, readFile, readdir, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WorkbookStore, digest, acquireWorkbookLock } from './lib/workbook-store.mjs';
+import { exportRecoveryBundle, verifyRecoveryBundle, rehearseRecoveryContents } from './lib/recovery-bundle.mjs';
 import { authorizedShutdown, publishRuntime, removeRuntime } from './lib/runtime-control.mjs';
 import { startFirstRunApplication } from './lib/first-run.mjs';
 import { createUpdateService } from './lib/update-service.mjs';
@@ -37,6 +41,7 @@ const SYNC_DIR = path.isAbsolute(configuredSyncDir) ? configuredSyncDir : path.r
 const PORT = process.env.PORT === undefined || process.env.PORT === '' ? 4173 : Number(process.env.PORT);
 if (!Number.isInteger(PORT) || PORT < 0 || PORT > 65535) throw new RangeError('PORT must be an integer from 0 to 65535.');
 const BACKUP_LIMIT = 30;
+const MAX_RECOVERY_UPLOAD_BYTES = 256 * 1024 * 1024;
 const RECEIPT_RETENTION_DAYS = Number(localConfig.receiptRetentionDays) || 30;
 const ACCOUNT_START_ROW = 5;
 const ACCOUNT_END_ROW = 14;
@@ -80,7 +85,11 @@ const CATEGORY_EMOJIS = new Map(Object.entries({
 }));
 
 app.disable('x-powered-by');
-app.use(localHttpBoundary);
+app.use((req, res, next) => localHttpBoundary(req, res, next, {
+  allowedBodyTypes: req.method === 'POST' && ['/api/settings/recovery/verify', '/api/settings/recovery/rehearse'].includes(req.path)
+    ? ['application/octet-stream']
+    : [],
+}));
 
 app.post('/api/system/shutdown', (req, res) => {
   if (!runtimeControl) return res.status(404).json({ error: 'Управление остановкой недоступно.', code: 'NOT_FOUND', retryable: false });
@@ -2228,6 +2237,93 @@ async function inspectPublishedMobileLists() {
   if (!accounts || accounts.some((account) => !Number.isSafeInteger(account?.id) || typeof account?.name !== 'string' || typeof account?.currency !== 'string')) return { state: 'invalid', accountCount: 0, modifiedAt };
   return { state: accounts.length ? 'ready' : 'no-accounts', accountCount: accounts.length, modifiedAt };
 }
+
+async function receiveRecoveryArchive(req, directory) {
+  const declaredLength = Number(req.headers['content-length']);
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_RECOVERY_UPLOAD_BYTES) {
+    req.resume();
+    throw new InputError('Recovery-архив больше 256 МБ. Выберите архив меньшего размера.', 413, 'RECOVERY_TOO_LARGE');
+  }
+  const target = path.join(directory, 'uploaded-recovery.zip');
+  let bytes = 0;
+  let tooLarge = false;
+  const limit = new Transform({
+    transform(chunk, _encoding, callback) {
+      if (tooLarge) { callback(); return; }
+      bytes += chunk.length;
+      if (bytes > MAX_RECOVERY_UPLOAD_BYTES) { tooLarge = true; callback(); }
+      else callback(null, chunk);
+    },
+  });
+  try {
+    await pipeline(req, limit, createWriteStream(target, { flags: 'wx' }));
+    if (tooLarge) throw new InputError('Recovery-архив больше 256 МБ. Выберите архив меньшего размера.', 413, 'RECOVERY_TOO_LARGE');
+    if (bytes === 0) throw new InputError('Выберите ZIP-архив Finance для проверки.', 400, 'RECOVERY_EMPTY');
+    return target;
+  } catch (error) {
+    await unlink(target).catch(() => {});
+    throw error;
+  }
+}
+
+async function checkedRecoveryArchive(archivePath, workspace) {
+  let verified;
+  try { verified = await verifyRecoveryBundle(archivePath); }
+  catch { throw new InputError('Архив повреждён или создан в несовместимом формате.', 400, 'RECOVERY_INVALID'); }
+  const candidate = path.join(workspace, 'recovery-validation.xlsx');
+  try {
+    await writeFile(candidate, verified.workbook, { flag: 'wx' });
+    const workbook = await validateWorkbookFile(candidate);
+    if (workbook.revision !== verified.manifest.sha256) throw new InputError('Контрольная сумма книги в архиве не совпала.', 400, 'RECOVERY_HASH_MISMATCH');
+    return verified;
+  } catch (error) {
+    if (error instanceof InputError || ['EACCES', 'EPERM', 'EBUSY', 'ENOSPC'].includes(error?.code)) throw error;
+    throw new InputError('В архиве нет корректной книги Finance.', 400, 'RECOVERY_WORKBOOK_INVALID');
+  } finally { await unlink(candidate).catch(() => {}); }
+}
+
+async function withRecoveryWorkspace(req, callback) {
+  const workspace = await mkdtemp(path.join(tmpdir(), 'finance-recovery-check-'));
+  try {
+    const archivePath = await receiveRecoveryArchive(req, workspace);
+    return await callback(archivePath, workspace);
+  } finally { await rm(workspace, { recursive: true, force: true }).catch((error) => diagnose(error)); }
+}
+
+app.get('/api/settings/recovery/export', async (_req, res, next) => {
+  let directory;
+  try {
+    directory = await mkdtemp(path.join(tmpdir(), 'finance-recovery-export-'));
+    const archive = await exportRecoveryBundle(WORKBOOK_PATH, directory, validateWorkbookFile);
+    res.setHeader('Cache-Control', 'no-store');
+    res.download(archive, path.basename(archive), async (error) => {
+      await rm(directory, { recursive: true, force: true }).catch((cleanupError) => diagnose(cleanupError));
+      if (error && !res.headersSent) next(error);
+      else if (error) diagnose(error);
+    });
+  } catch (error) {
+    if (directory) await rm(directory, { recursive: true, force: true }).catch((cleanupError) => diagnose(cleanupError));
+    next(error);
+  }
+});
+
+app.post('/api/settings/recovery/verify', async (req, res, next) => {
+  try {
+    const verified = await withRecoveryWorkspace(req, async (archivePath, workspace) => checkedRecoveryArchive(archivePath, workspace));
+    res.json({ valid: true, manifest: verified.manifest, workbookBytes: verified.workbook.length });
+  } catch (error) { next(error); }
+});
+
+app.post('/api/settings/recovery/rehearse', async (req, res, next) => {
+  try {
+    const result = await withRecoveryWorkspace(req, async (archivePath, workspace) => {
+      const verified = await checkedRecoveryArchive(archivePath, workspace);
+      const rehearsal = await rehearseRecoveryContents(verified, path.join(workspace, 'rehearsal'), validateWorkbookFile);
+      return { ...rehearsal, workbookBytes: verified.workbook.length };
+    });
+    res.json({ valid: true, rehearsed: true, manifest: result.manifest, workbookBytes: result.workbookBytes });
+  } catch (error) { next(error); }
+});
 
 app.get('/api/settings', async (_req, res, next) => {
   try {

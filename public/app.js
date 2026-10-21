@@ -43,6 +43,10 @@ const state = {
   updateCheck: null,
   updateChecking: false,
   updateInstallQueued: false,
+  recoveryFile: null,
+  recoveryBusy: false,
+  recoveryStatus: 'Выберите ZIP-архив, чтобы проверить его перед копированием на внешний носитель.',
+  recoveryResult: null,
 };
 
 const esc = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
@@ -83,6 +87,54 @@ async function request(url, options) {
     error.code = payload.code; error.retryable = Boolean(payload.retryable); throw error;
   }
   return payload;
+}
+
+async function requestRecoveryFile(endpoint) {
+  if (!state.recoveryFile) throw new Error('Сначала выберите recovery-архив ZIP.');
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: state.recoveryFile,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'Не удалось проверить recovery-архив.');
+  return payload;
+}
+
+async function downloadRecoveryArchive() {
+  let saveHandle = null;
+  const suggestedName = `finance-recovery-${new Date().toISOString().replace(/[:.]/g, '-')}.zip`;
+  if (typeof window.showSaveFilePicker === 'function') {
+    try {
+      saveHandle = await window.showSaveFilePicker({
+        suggestedName,
+        types: [{ description: 'Finance recovery archive', accept: { 'application/zip': ['.zip'] } }],
+      });
+    } catch (error) {
+      if (error?.name === 'AbortError') return false;
+    }
+  }
+  const response = await fetch('/api/settings/recovery/export');
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || 'Не удалось создать recovery-архив.');
+  }
+  const archive = await response.blob();
+  if (saveHandle) {
+    const writable = await saveHandle.createWritable();
+    await writable.write(archive);
+    await writable.close();
+  } else {
+    const url = URL.createObjectURL(archive);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = suggestedName;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  }
+  return true;
 }
 
 let loadSequence = 0;
@@ -672,11 +724,26 @@ function renderSettings() {
             : '<p class="update-message">Проверка выполняется только по запросу. Финансовые данные при этом не отправляются.</p>';
   const channelLabel = updates.channel === 'beta' ? 'beta: beta и стабильные версии' : updates.channel === 'stable' ? 'стабильный: только стабильные версии' : 'сборка разработчика';
   const rollbackLabel = updates.rollbackVersion === 'legacy' ? 'предыдущую установленную версию' : `версию ${updates.rollbackVersion || ''}`;
+  const recoveryFileLabel = state.recoveryFile
+    ? `${state.recoveryFile.name} · ${number(state.recoveryFile.size / 1024 / 1024, 1)} МБ`
+    : 'Архив не выбран';
+  const recoveryButtonsDisabled = !state.recoveryFile || state.recoveryFile.size > 256 * 1024 * 1024 || state.recoveryBusy;
+  const recoveryReport = state.recoveryResult
+    ? `<p class="recovery-report">SHA-256: <code>${esc(state.recoveryResult.manifest.sha256)}</code><br>Создан: ${esc(new Date(state.recoveryResult.manifest.createdAt).toLocaleString('ru-RU'))} · Книга: ${number(state.recoveryResult.workbookBytes / 1024 / 1024, 1)} МБ</p>`
+    : '';
   content.innerHTML = `${pageHeader('Настройки', 'Системные параметры приложения')}
     <div class="settings-grid">
       <article class="card settings-card"><div class="card-head"><div><h2>Excel и резервные копии</h2><p>Текущие локальные пути и состояние хранения</p></div></div>
         ${settingRow('Папка данных Finance', settings.dataDirectory)}${settingRow('Рабочая книга', settings.workbookPath)}${settingRow('Последнее изменение', new Date(settings.workbookModifiedAt).toLocaleString('ru-RU'))}${settingRow('Папка бэкапов', settings.backupDirectory)}${settingRow('Бэкапы', `${settings.backupCount} из ${settings.backupLimit}`)}${settingRow('Последний бэкап', settings.latestBackup)}
         <div class="settings-actions settings-actions-wrap"><button class="secondary-button" type="button" data-open-folder="data">Открыть папку данных</button><button class="secondary-button" type="button" data-open-folder="workbook">Открыть папку книги</button><button class="secondary-button" type="button" data-open-folder="backups">Открыть бэкапы</button><button class="danger-button" type="button" data-open-restore>Восстановить из бэкапа</button></div>
+      </article>
+      <article class="card settings-card settings-recovery-card"><div class="card-head"><div><h2>Копия на другом носителе</h2><p>Создайте ZIP всей книги и проверьте его перед хранением.</p></div></div>
+        <p class="recovery-help">Архив содержит полную финансовую книгу и постоянный реестр синхронизации. ZIP не зашифрован: храните его на защищённом носителе с ограниченным доступом. Выберите другой физический диск. Finance не отправляет архив в интернет.</p>
+        <button class="primary-button" type="button" data-recovery-export ${state.recoveryBusy ? 'disabled' : ''}>${state.recoveryBusy ? 'Подождите…' : 'Создать recovery-архив'}</button>
+        <label class="field recovery-file-label"><span>Выберите ZIP для проверки или репетиции</span><input type="file" accept=".zip,application/zip" data-recovery-file><small>${esc(recoveryFileLabel)} · максимум 256 МБ</small></label>
+        <div class="settings-actions settings-actions-wrap"><button class="secondary-button" type="button" data-recovery-verify ${recoveryButtonsDisabled ? 'disabled' : ''}>Проверить архив</button><button class="secondary-button" type="button" data-recovery-rehearse ${recoveryButtonsDisabled ? 'disabled' : ''}>Проверить восстановление</button></div>
+        <p class="recovery-status" aria-live="polite">${esc(state.recoveryStatus)}</p>${recoveryReport}
+        <p class="recovery-footnote">Репетиция проверяет восстановление во временной новой папке и удаляет её после проверки. Рабочая книга не изменяется.</p>
       </article>
       <article class="card settings-card settings-sync-card"><div class="card-head"><div><h2>Мобильная синхронизация</h2><p>Обработка на компьютере. Доставку на телефон выполняет Syncthing.</p></div><span class="tag sync-status ${sync.lastError ? 'required' : ''}">${sync.running ? 'Синхронизация…' : sync.lastError ? 'Требует внимания' : sync.lastScanAt ? 'Обработано на компьютере' : 'Ожидает обработки'}</span></div>
         ${settingRow('Папка Syncthing', settings.syncDirectory)}${settingRow('Последняя проверка', sync.lastScanAt ? new Date(sync.lastScanAt).toLocaleString('ru-RU') : 'Ещё не выполнялась')}${settingRow('Импортировано', sync.imported)}${settingRow('Дубликаты', sync.duplicates)}${settingRow('Ошибки', sync.errors)}${settingRow('Хранение квитанций', `${settings.receiptRetentionDays} дней`)}
@@ -854,6 +921,69 @@ document.addEventListener('click', async (event) => {
   if (event.target.closest('[data-close-savings-history]')) { savingsHistoryDialog.close(); return; }
   const refreshRatesButton = event.target.closest('[data-action="refresh-rates"]');
   if (refreshRatesButton) { await refreshRatesFromTopbar(refreshRatesButton); return; }
+  const recoveryExportButton = event.target.closest('[data-recovery-export]');
+  if (recoveryExportButton) {
+    if (state.recoveryBusy) return;
+    state.recoveryBusy = true;
+    state.recoveryStatus = 'Проверяем книгу и готовим ZIP-архив…';
+    state.recoveryResult = null;
+    renderSettings();
+    try {
+      const saved = await downloadRecoveryArchive();
+      state.recoveryStatus = saved
+        ? 'Архив скачан. Если браузер сохранил его в «Загрузки», сначала скопируйте ZIP на другой физический диск, затем выберите его ниже для проверки.'
+        : 'Сохранение архива отменено.';
+      if (saved) notify('Recovery-архив создан. Проверьте его после сохранения.');
+    } catch (error) {
+      state.recoveryStatus = error.message;
+      notify(error.message, 'error');
+    } finally {
+      state.recoveryBusy = false;
+      renderSettings();
+    }
+    return;
+  }
+  const recoveryVerifyButton = event.target.closest('[data-recovery-verify]');
+  if (recoveryVerifyButton) {
+    if (!state.recoveryFile || state.recoveryBusy) return;
+    state.recoveryBusy = true;
+    state.recoveryStatus = 'Проверяем контрольную сумму и структуру книги…';
+    state.recoveryResult = null;
+    renderSettings();
+    try {
+      state.recoveryResult = await requestRecoveryFile('/api/settings/recovery/verify');
+      state.recoveryStatus = 'Архив цел, а книга внутри прошла проверку Finance.';
+      notify('Recovery-архив проверен.');
+    } catch (error) {
+      state.recoveryStatus = error.message;
+      notify(error.message, 'error');
+    } finally {
+      state.recoveryBusy = false;
+      renderSettings();
+    }
+    return;
+  }
+  const recoveryRehearseButton = event.target.closest('[data-recovery-rehearse]');
+  if (recoveryRehearseButton) {
+    if (!state.recoveryFile || state.recoveryBusy) return;
+    if (!confirm('Finance временно восстановит книгу из выбранного ZIP в новую отдельную папку, проверит её и удалит тестовую папку. Рабочая книга не изменится. Продолжить?')) return;
+    state.recoveryBusy = true;
+    state.recoveryStatus = 'Проверяем архив и пробуем восстановить книгу в отдельную временную папку…';
+    state.recoveryResult = null;
+    renderSettings();
+    try {
+      state.recoveryResult = await requestRecoveryFile('/api/settings/recovery/rehearse');
+      state.recoveryStatus = 'Репетиция восстановления прошла успешно. Тестовая копия удалена; рабочая книга не затронута.';
+      notify('Recovery-архив успешно восстановлен в тестовой папке.');
+    } catch (error) {
+      state.recoveryStatus = error.message;
+      notify(error.message, 'error');
+    } finally {
+      state.recoveryBusy = false;
+      renderSettings();
+    }
+    return;
+  }
   const clearOperationFilters = event.target.closest('#clear-operation-filters');
   if (clearOperationFilters) {
     state.operationMonth = localIsoDate().slice(0, 7); state.dateFrom = ''; state.dateTo = ''; state.operationType = 'Все';
@@ -1080,6 +1210,19 @@ document.addEventListener('click', async (event) => {
 });
 
 document.addEventListener('change', (event) => {
+  const recoveryInput = event.target.closest('[data-recovery-file]');
+  if (recoveryInput) {
+    state.recoveryFile = recoveryInput.files?.[0] || null;
+    state.recoveryResult = null;
+    const tooLarge = state.recoveryFile && state.recoveryFile.size > 256 * 1024 * 1024;
+    state.recoveryStatus = tooLarge
+      ? 'Архив больше 256 МБ. Выберите меньший файл.'
+      : state.recoveryFile
+        ? 'Архив выбран. Сначала проверьте его; репетиция дополнительно проверит восстановление.'
+        : 'Выберите ZIP-архив, чтобы проверить его перед копированием на внешний носитель.';
+    renderSettings();
+    return;
+  }
   const checkbox = event.target.closest('[data-phone-check]');
   if (!checkbox) return;
   const checks = readPhoneSetupChecks();

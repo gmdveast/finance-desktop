@@ -426,9 +426,10 @@ scenario('окно новой операции прокручивается вн
   expect(layout.submitBottom).toBeLessThanOrEqual(layout.formBottom);
 });
 
-scenario('все экраны и основной финансовый сценарий', async ({ page }) => {
+scenario('все экраны и основной финансовый сценарий', async ({ page, request }) => {
   const rateLookupRequests = [];
   page.on('request', (requestEvent) => { if (requestEvent.url().includes('/api/rates?')) rateLookupRequests.push(requestEvent.url()); });
+  await page.addInitScript(() => { Object.defineProperty(window, 'showSaveFilePicker', { value: undefined }); });
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /Обзор за/ })).toBeVisible();
   await expect(page.locator('#workbook-name')).toHaveText('e2e.xlsx');
@@ -629,6 +630,20 @@ scenario('все экраны и основной финансовый сцен�
   await expect(page.locator('#restore-dialog')).toBeVisible();
   await expect(page.locator('#restore-form select[name="backup"] option')).not.toHaveCount(0);
   await page.locator('#restore-dialog [data-close-restore]').first().click();
+  await expect(page.getByRole('heading', { name: 'Копия на другом носителе' })).toBeVisible();
+  const archiveDownload = page.waitForEvent('download');
+  await page.locator('[data-recovery-export]').click();
+  expect((await archiveDownload).suggestedFilename()).toMatch(/^finance-recovery-.+\.zip$/u);
+  await expect(page.locator('.recovery-status')).toContainText('Архив скачан');
+  const recoveryResponse = await request.get('/api/settings/recovery/export');
+  expect(recoveryResponse.ok()).toBeTruthy();
+  await page.locator('[data-recovery-file]').setInputFiles({ name: 'finance-recovery-test.zip', mimeType: 'application/zip', buffer: await recoveryResponse.body() });
+  await page.locator('[data-recovery-verify]').click();
+  await expect(page.locator('.recovery-status')).toContainText('Архив цел');
+  await expect(page.locator('.recovery-report')).toContainText('SHA-256');
+  page.once('dialog', (confirmation) => confirmation.accept());
+  await page.locator('[data-recovery-rehearse]').click();
+  await expect(page.locator('.recovery-status')).toContainText('Репетиция восстановления прошла успешно');
   const exportResponse = page.waitForResponse((response) => response.url().endsWith('/api/settings/export-mobile') && response.request().method() === 'POST');
   await page.getByRole('button', { name: 'Обновить данные Obsidian' }).click();
   const exportPayload = await (await exportResponse).json();

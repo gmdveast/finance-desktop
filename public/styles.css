@@ -314,6 +314,16 @@ input[name="destinationAmount"][readonly], #investment-category-label[readonly] 
 .settings-sync-card > .card-head { padding-right: 170px; }
 .settings-sync-card > .card-head > .sync-status { position: absolute; top: 22px; right: 22px; }
 .settings-card .setting-row { border-bottom: 0; }
+.settings-recovery-card { grid-column: 1 / -1; gap: 12px; }
+.recovery-help, .recovery-footnote { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.recovery-file-label { max-width: 620px; }
+.recovery-file-label input { min-width: 0; width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); }
+.recovery-file-label small { display: block; margin-top: 7px; color: var(--muted); }
+.recovery-report { margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: #f7f8f5; color: var(--ink); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.recovery-report code { font-size: 10px; }
+.recovery-status { margin: 0; font-size: 12px; line-height: 1.55; }
+.recovery-status:empty { display: none; }
+.settings-recovery-card .settings-actions { max-width: 620px; margin-top: 0; padding-top: 0; }
 .setting-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
 .setting-row span { color: var(--muted); }
 .setting-row strong { overflow-wrap: anywhere; font-weight: 700; }

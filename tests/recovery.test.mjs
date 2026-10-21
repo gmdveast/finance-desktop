@@ -26,4 +26,23 @@ test('recovery bundle verifies bytes and rehearses only into a new directory', a
   const corrupt = path.join(directory, 'corrupt.zip');
   await fs.writeFile(corrupt, await zip.generateAsync({ type: 'nodebuffer' }));
   await assert.rejects(verifyRecoveryBundle(corrupt));
+
+  const unexpected = new JSZip();
+  unexpected.file('manifest.json', JSON.stringify({ schema: 1, createdAt: new Date().toISOString(), sha256: digest(Buffer.from('x')), bytes: 1 }));
+  unexpected.file('workbook.xlsx', 'x');
+  unexpected.file('extra.txt', 'unexpected');
+  const extraArchive = path.join(directory, 'extra.zip');
+  await fs.writeFile(extraArchive, await unexpected.generateAsync({ type: 'nodebuffer' }));
+  await assert.rejects(verifyRecoveryBundle(extraArchive));
+
+  const invalidWorkbook = Buffer.from('not an xlsx');
+  const invalidZip = new JSZip();
+  invalidZip.file('manifest.json', JSON.stringify({ schema: 1, createdAt: new Date().toISOString(), sha256: digest(invalidWorkbook), bytes: invalidWorkbook.length }));
+  invalidZip.file('workbook.xlsx', invalidWorkbook);
+  const invalidBundle = path.join(directory, 'invalid-workbook.zip');
+  await fs.writeFile(invalidBundle, await invalidZip.generateAsync({ type: 'nodebuffer' }));
+  const failedRehearsal = path.join(directory, 'failed-rehearsal');
+  await assert.rejects(rehearseRecovery(invalidBundle, failedRehearsal, validateWorkbookFile));
+  await assert.rejects(fs.access(failedRehearsal));
+  assert.equal(digest(await fs.readFile(workbook)), original);
 });
