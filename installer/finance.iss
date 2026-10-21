@@ -79,12 +79,22 @@ begin
     ((Character >= '0') and (Character <= '9'));
 end;
 
-function InstalledVersionDirectory(const Version: String): String;
+function FinanceBaseDirectory: String;
 begin
+  { InitializeSetup runs before the application-directory constant is ready.
+    The destination is fixed by DefaultDirName and DisableDirPage. }
+  Result := ExpandConstant('{localappdata}\Programs\Finance');
+end;
+
+function InstalledVersionDirectory(const Version: String): String;
+var
+  BaseDirectory: String;
+begin
+  BaseDirectory := FinanceBaseDirectory;
   if (Version = '') or (Version = 'legacy') then
-    Result := ExpandConstant('{app}')
+    Result := BaseDirectory
   else if IsSafeVersion(Version) then
-    Result := ExpandConstant('{app}\versions\' + Version)
+    Result := BaseDirectory + '\versions\' + Version
   else
     Result := '';
 end;
