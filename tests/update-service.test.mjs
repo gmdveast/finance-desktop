@@ -86,6 +86,52 @@ test('installer bytes must match the published SHA-256 digest', async () => {
   await assert.rejects(tampered.downloadInstaller('1.0.1'), /checksum does not match/);
 });
 
+test('installer body may outlast the response-header timeout and is still verified', async () => {
+  const bytes = Buffer.from('a deliberately delayed installer body');
+  const releases = [release('1.0.1', { digest: hash(bytes) })];
+  const fetchImpl = async (url) => {
+    if (String(url).startsWith(`https://api.github.com/repos/${DESKTOP_REPOSITORY}/releases`)) {
+      return new Response(JSON.stringify(releases), { headers: { 'content-type': 'application/json' } });
+    }
+    return new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes.subarray(0, 8));
+        setTimeout(() => {
+          controller.enqueue(bytes.subarray(8));
+          controller.close();
+        }, 40);
+      },
+    }), { headers: { 'content-length': String(bytes.length) } });
+  };
+  const service = createUpdateService({
+    currentVersion: '1.0.0',
+    channel: 'stable',
+    fetchImpl,
+    downloadTimeouts: { request: 10, idle: 100, total: 200 },
+  });
+
+  assert.deepEqual((await service.downloadInstaller('1.0.1')).bytes, bytes);
+});
+
+test('installer download fails when the response body stops making progress', async () => {
+  const bytes = Buffer.from('installer body');
+  const releases = [release('1.0.1', { digest: hash(bytes) })];
+  const fetchImpl = async (url) => {
+    if (String(url).startsWith(`https://api.github.com/repos/${DESKTOP_REPOSITORY}/releases`)) {
+      return new Response(JSON.stringify(releases), { headers: { 'content-type': 'application/json' } });
+    }
+    return new Response(new ReadableStream({ start() {} }), { headers: { 'content-length': String(bytes.length) } });
+  };
+  const service = createUpdateService({
+    currentVersion: '1.0.0',
+    channel: 'stable',
+    fetchImpl,
+    downloadTimeouts: { request: 100, idle: 10, total: 100 },
+  });
+
+  await assert.rejects(service.downloadInstaller('1.0.1'), /download timed out/);
+});
+
 test('checksum sidecar fallback validates its filename and hash before returning bytes', async () => {
   const bytes = Buffer.from('installer body');
   const version = '1.0.1';
