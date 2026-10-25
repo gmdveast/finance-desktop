@@ -39,6 +39,86 @@ scenario('настройки отдельно показывают обновл�
   await expect(page.getByRole('button', { name: 'Скачать и установить' })).toBeVisible();
 });
 
+scenario('настройки выравнивают кнопки по нижнему краю; иконки и логотип без ореола', async ({ page }) => {
+  await page.goto('/#settings');
+  await expect(page.locator('.settings-grid')).toBeVisible();
+  await expect(page.locator('[data-action="refresh-rates"]')).toBeHidden();
+  await expect(page.locator('[data-action="add-operation"]')).toBeHidden();
+  const settingsLayout = await page.locator('.settings-grid').evaluate((grid) => [...grid.querySelectorAll(':scope > .settings-card')].map((card) => {
+    const actionRows = [...card.children].filter((child) => child.classList.contains('settings-actions'));
+    const actions = actionRows.at(-1);
+    const note = card.querySelector('.update-plugin-note');
+    return {
+      actionsAreLast: card.lastElementChild === actions,
+      noteBeforeActions: !note || Boolean(note.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING),
+      bottomGap: card.getBoundingClientRect().bottom - actions.getBoundingClientRect().bottom,
+      actionHeights: [...actions.children].map((control) => control.getBoundingClientRect().height),
+    };
+  }));
+  expect(settingsLayout).toHaveLength(4);
+  for (const card of settingsLayout) {
+    expect(card.actionsAreLast).toBeTruthy();
+    expect(card.noteBeforeActions).toBeTruthy();
+    expect(card.bottomGap).toBeGreaterThanOrEqual(20);
+    expect(card.bottomGap).toBeLessThan(26);
+    expect(card.actionHeights.every((height) => height >= 44)).toBeTruthy();
+  }
+
+  const recoveryOrder = await page.locator('.settings-recovery-card').evaluate((card) => {
+    const children = [...card.children];
+    return {
+      actions: children.indexOf(card.querySelector('.settings-actions')),
+      status: children.indexOf(card.querySelector('.recovery-status')),
+      footnote: children.indexOf(card.querySelector('.recovery-footnote')),
+    };
+  });
+  expect(recoveryOrder.actions).toBeLessThan(recoveryOrder.status);
+  expect(recoveryOrder.status).toBeLessThan(recoveryOrder.footnote);
+
+  const recoveryButtonLayout = await page.locator('.settings-recovery-card').evaluate((card) => {
+    const actions = card.querySelector('.settings-actions');
+    const [verify, rehearse] = actions.children;
+    const actionBounds = actions.getBoundingClientRect();
+    const verifyBounds = verify.getBoundingClientRect();
+    const rehearseBounds = rehearse.getBoundingClientRect();
+    return {
+      actionsWidth: actionBounds.width,
+      buttonWidths: [verifyBounds.width, rehearseBounds.width],
+      buttonHeights: [verifyBounds.height, rehearseBounds.height],
+      leftGap: verifyBounds.left - actionBounds.left,
+      rightGap: actionBounds.right - rehearseBounds.right,
+    };
+  });
+  expect(recoveryButtonLayout.actionsWidth).toBeGreaterThan(620);
+  expect(Math.abs(recoveryButtonLayout.buttonWidths[0] - recoveryButtonLayout.buttonWidths[1])).toBeLessThan(0.5);
+  expect(recoveryButtonLayout.buttonHeights[0]).toBe(recoveryButtonLayout.buttonHeights[1]);
+  expect(recoveryButtonLayout.leftGap).toBe(0);
+  expect(recoveryButtonLayout.rightGap).toBe(0);
+
+  await page.locator('.nav-item[data-view="balance"]').click();
+  await expect(page.locator('[data-action="refresh-rates"]')).toBeVisible();
+  await expect(page.locator('[data-action="add-operation"]')).toBeVisible();
+  const topbarStyles = await page.locator('.topbar-actions').evaluate((actions) => {
+    const buttons = [...actions.querySelectorAll(':scope > button')];
+    const icons = buttons.map((button) => button.querySelector('.topbar-icon'));
+    return {
+      gaps: buttons.map((button) => getComputedStyle(button).gap),
+      iconWidths: icons.map((icon) => getComputedStyle(icon).width),
+      iconContents: icons.map((icon) => icon.textContent.trim() || (icon.querySelector('svg') ? 'svg' : '')),
+    };
+  });
+  expect(topbarStyles.gaps).toEqual(['8px', '8px']);
+  expect(topbarStyles.iconWidths).toEqual(['18px', '18px']);
+  expect(topbarStyles.iconContents).toEqual(['↻', 'svg']);
+
+  const logoStyle = await page.locator('.brand-mark').evaluate((mark) => ({
+    background: getComputedStyle(mark).backgroundColor,
+    blend: getComputedStyle(mark.querySelector('img')).mixBlendMode,
+  }));
+  expect(logoStyle.background).toBe('rgb(23, 42, 36)');
+  expect(logoStyle.blend).toBe('lighten');
+});
+
 scenario('фоновая проверка показывает цветной индикатор у настроек, не устанавливая обновление', async ({ page }) => {
   let updateCheckCount = 0;
   let updateCheckFails = false;
@@ -774,6 +854,18 @@ scenario('все экраны и основной финансовый сцен�
   await page.locator('[data-recovery-verify]').click();
   await expect(page.locator('.recovery-status')).toContainText('Архив цел');
   await expect(page.locator('.recovery-report')).toContainText('SHA-256');
+  const recoveryResultOrder = await page.locator('.settings-recovery-card').evaluate((card) => {
+    const children = [...card.children];
+    return {
+      actions: children.indexOf(card.querySelector('.settings-actions')),
+      status: children.indexOf(card.querySelector('.recovery-status')),
+      report: children.indexOf(card.querySelector('.recovery-report')),
+      footnote: children.indexOf(card.querySelector('.recovery-footnote')),
+    };
+  });
+  expect(recoveryResultOrder.actions).toBeLessThan(recoveryResultOrder.status);
+  expect(recoveryResultOrder.status).toBeLessThan(recoveryResultOrder.report);
+  expect(recoveryResultOrder.report).toBeLessThan(recoveryResultOrder.footnote);
   page.once('dialog', (confirmation) => confirmation.accept());
   await page.locator('[data-recovery-rehearse]').click();
   await expect(page.locator('.recovery-status')).toContainText('Репетиция восстановления прошла успешно');
