@@ -39,6 +39,90 @@ scenario('настройки отдельно показывают обновл�
   await expect(page.getByRole('button', { name: 'Скачать и установить' })).toBeVisible();
 });
 
+scenario('фоновая проверка показывает цветной индикатор у настроек, не устанавливая обновление', async ({ page }) => {
+  let updateCheckCount = 0;
+  let updateCheckFails = false;
+  await page.route('**/api/settings', async (route) => {
+    const response = await route.fetch();
+    const settings = await response.json();
+    settings.updates = { ...settings.updates, version: '1.0.0-beta.1', channel: 'beta' };
+    await route.fulfill({ response, json: settings });
+  });
+  await page.route('**/api/updates/check', (route) => {
+    updateCheckCount += 1;
+    if (updateCheckFails) return route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: 'Не удалось проверить обновления. Повторите попытку.' }),
+    });
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        enabled: true,
+        currentVersion: '1.0.0-beta.1',
+        channel: 'beta',
+        update: {
+          version: '1.0.0-beta.2',
+          channel: 'beta',
+          publishedAt: '2026-10-20T10:00:00Z',
+          notes: 'Исправления и упрощение обновления.',
+          url: 'https://github.com/gmdveast/finance-desktop/releases/tag/v1.0.0-beta.2',
+          installerName: 'Finance-Setup-1.0.0-beta.2-x64.exe',
+        },
+      }),
+    });
+  });
+
+  await page.goto('/');
+  const settingsButton = page.locator('.nav-item[data-view="settings"]');
+  const indicator = settingsButton.locator('.nav-update-indicator');
+  await expect(settingsButton).toHaveAttribute('data-update-available', 'true');
+  await expect(settingsButton).toHaveAttribute('aria-label', 'Настройки. Доступно обновление Finance 1.0.0-beta.2');
+  await expect(indicator).toBeVisible();
+  await expect(indicator).toHaveCSS('background-color', 'rgb(255, 184, 77)');
+  expect(updateCheckCount).toBe(1);
+
+  await settingsButton.click();
+  await expect(page.getByText('Доступна версия 1.0.0-beta.2 (beta).')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Скачать и установить' })).toBeVisible();
+  await expect(settingsButton).toHaveAttribute('data-update-available', 'true');
+  expect(await settingsButton.evaluate((button) => getComputedStyle(button, '::after').backgroundColor)).toBe('rgb(217, 255, 105)');
+  await expect(indicator).toHaveCSS('background-color', 'rgb(255, 184, 77)');
+  expect(updateCheckCount).toBe(1);
+
+  updateCheckFails = true;
+  await page.reload();
+  const reloadedSettingsButton = page.locator('.nav-item[data-view="settings"]');
+  await expect(reloadedSettingsButton).toHaveAttribute('data-update-available', 'true');
+  await reloadedSettingsButton.click();
+  await expect(page.locator('.settings-update-card .update-error')).toContainText('Не удалось проверить обновления. Повторите попытку.');
+  await expect(reloadedSettingsButton).toHaveAttribute('aria-label', 'Настройки. Доступно обновление Finance 1.0.0-beta.2');
+  expect(updateCheckCount).toBe(2);
+});
+
+scenario('сбой фоновой проверки не показывает ни доступное обновление, ни последнюю версию', async ({ page }) => {
+  await page.route('**/api/settings', async (route) => {
+    const response = await route.fetch();
+    const settings = await response.json();
+    settings.updates = { ...settings.updates, version: '1.0.0-beta.1', channel: 'beta' };
+    await route.fulfill({ response, json: settings });
+  });
+  await page.route('**/api/updates/check', (route) => route.fulfill({
+    status: 503,
+    contentType: 'application/json',
+    body: JSON.stringify({ error: 'Не удалось проверить обновления. Повторите попытку.' }),
+  }));
+
+  await page.goto('/');
+  const settingsButton = page.locator('.nav-item[data-view="settings"]');
+  await expect(settingsButton).not.toHaveAttribute('data-update-available', 'true');
+  await settingsButton.click();
+  await expect(page.locator('.settings-update-card .update-error')).toContainText('Не удалось проверить обновления. Повторите попытку.');
+  await expect(page.locator('.settings-update-card')).not.toContainText('Установлена последняя доступная версия');
+  await expect(page.locator('#toast-stack .toast')).toHaveCount(0);
+});
+
 scenario('порядок категорий, валют и необходимости сохраняется и применяется в формах', async ({ page, request }) => {
   const initial = await (await request.get('/api/data')).json();
   await page.goto('/#lists');

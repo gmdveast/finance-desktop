@@ -1,6 +1,7 @@
 param(
   [ValidateSet('x64')]
   [string]$Architecture = 'x64',
+  [string]$ReleaseDirectory = '',
   [string]$NodeVersion = '24.15.0',
   [string]$AppVersion = '',
   [string]$UpdateChannel = '',
@@ -11,13 +12,23 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$releaseRoot = Join-Path $repoRoot ".release\windows-$Architecture"
+if (-not $ReleaseDirectory) { $ReleaseDirectory = ".release\windows-$Architecture" }
+if ([IO.Path]::IsPathRooted($ReleaseDirectory)) {
+  $releaseRoot = [IO.Path]::GetFullPath($ReleaseDirectory)
+} else {
+  $releaseRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot $ReleaseDirectory))
+}
+$allowedReleaseRoot = [IO.Path]::GetFullPath((Join-Path $repoRoot '.release')).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+if (-not $releaseRoot.StartsWith($allowedReleaseRoot, [StringComparison]::OrdinalIgnoreCase)) {
+  throw 'ReleaseDirectory must point to a dedicated directory inside .release.'
+}
 $cacheDirectory = Join-Path $releaseRoot 'cache'
 $buildDirectory = Join-Path $releaseRoot 'build'
 $stageDirectory = Join-Path $releaseRoot 'stage'
 $appStage = $stageDirectory
 $runtimeStage = Join-Path $appStage 'runtime'
 $outputDirectory = Join-Path $releaseRoot 'output'
+$iconSourcePath = Join-Path $repoRoot 'installer\assets\finance-icon.png'
 $archiveName = "node-v$NodeVersion-win-$Architecture.zip"
 $archivePath = Join-Path $cacheDirectory $archiveName
 $checksumsPath = Join-Path $cacheDirectory 'SHASUMS256.txt'
@@ -37,6 +48,9 @@ if (-not $InnoCompilerPath) {
 }
 if (-not $InnoCompilerPath -or -not (Test-Path -LiteralPath $InnoCompilerPath)) {
   throw 'Inno Setup 6 is required to compile the installer. Install it, then rerun this script.'
+}
+if (-not (Test-Path -LiteralPath $iconSourcePath -PathType Leaf)) {
+  throw 'The Finance icon source is missing: installer\assets\finance-icon.png.'
 }
 
 $package = Get-Content -LiteralPath (Join-Path $repoRoot 'package.json') -Raw | ConvertFrom-Json
@@ -71,6 +85,7 @@ foreach ($target in @($buildDirectory, $stageDirectory, $outputDirectory)) {
   if (Test-Path -LiteralPath $resolvedTarget) { Remove-Item -LiteralPath $resolvedTarget -Recurse -Force }
 }
 New-Item -ItemType Directory -Path $buildDirectory, $appStage, $runtimeStage, $outputDirectory -Force | Out-Null
+& (Join-Path $PSScriptRoot 'prepare-windows-icon.ps1') -SourcePath $iconSourcePath -DestinationPath (Join-Path $appStage 'finance.ico')
 Expand-Archive -LiteralPath $archivePath -DestinationPath $buildDirectory -Force
 $nodeRoot = Join-Path $buildDirectory "node-v$NodeVersion-win-$Architecture"
 if (-not (Test-Path -LiteralPath (Join-Path $nodeRoot 'node.exe'))) { throw 'The official Node.js archive did not contain node.exe.' }

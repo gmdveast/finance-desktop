@@ -19,6 +19,7 @@ AppPublisher=Finance
 DefaultDirName={localappdata}\Programs\Finance
 DefaultGroupName=Finance
 UninstallDisplayName=Finance
+SetupIconFile={#StageDir}\finance.ico
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -34,7 +35,7 @@ RestartApplications=no
 Uninstallable=yes
 
 [Tasks]
-Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; GroupDescription: "Дополнительные ярлыки:"; Flags: unchecked
+Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; GroupDescription: "Дополнительные ярлыки:"
 Name: "autostart"; Description: "Запускать Finance при входе в Windows"; GroupDescription: "Дополнительные ярлыки:"; Flags: unchecked
 
 [Files]
@@ -44,16 +45,29 @@ Source: "{#StageDir}\scripts\finance-stop.vbs"; DestDir: "{app}\scripts"; Flags:
 Source: "{#StageDir}\scripts\finance-rollback.vbs"; DestDir: "{app}\scripts"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-start.vbs"""; WorkingDir: "{app}"
+Name: "{group}\Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-start.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\versions\{#AppVersion}\finance.ico"; IconIndex: 0
 Name: "{group}\Выйти из Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-stop.vbs"""; WorkingDir: "{app}"
 Name: "{group}\Откатить версию Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-rollback.vbs"""; WorkingDir: "{app}"
-Name: "{autodesktop}\Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-start.vbs"""; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-start.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\versions\{#AppVersion}\finance.ico"; IconIndex: 0; Tasks: desktopicon
 Name: "{userstartup}\Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-start.vbs"""; WorkingDir: "{app}"; Tasks: autostart
 
 [Run]
 Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-start.vbs"""; WorkingDir: "{app}"; Flags: postinstall skipifsilent
 
 [Code]
+var
+  DesktopIconTaskDefaultApplied: Boolean;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpSelectTasks) and not DesktopIconTaskDefaultApplied then
+  begin
+    DesktopIconTaskDefaultApplied := True;
+    { desktopicon is the first task and is checked on every setup run. }
+    WizardForm.TasksList.Checked[0] := True;
+  end;
+end;
+
 function IsSafeVersion(const Value: String): Boolean;
 var
   Index: Integer;
@@ -185,5 +199,6 @@ begin
   begin
     RegDeleteValue(HKCU, 'Software\FinanceDesktop', 'CurrentVersion');
     RegDeleteValue(HKCU, 'Software\FinanceDesktop', 'PreviousVersion');
+    RegDeleteKeyIfEmpty(HKCU, 'Software\FinanceDesktop');
   end;
 end;

@@ -41,7 +41,9 @@ const state = {
   operationSort: 'date',
   operationSortDirection: 'desc',
   updateCheck: null,
+  updateCheckError: null,
   updateChecking: false,
+  updateNoticeVersion: null,
   updateInstallQueued: false,
   recoveryFile: null,
   recoveryBusy: false,
@@ -167,6 +169,84 @@ async function downloadRecoveryArchive() {
 let loadSequence = 0;
 let freshnessCheck = null;
 let draftDirty = false;
+let updateCheckRequest = null;
+let automaticUpdateCheckStarted = false;
+
+function updateNoticeStorageKey() {
+  const updates = state.settings?.updates;
+  if (!['beta', 'stable'].includes(updates?.channel) || !updates.version) return null;
+  return `finance:update-notice:${updates.channel}:${updates.version}`;
+}
+
+function restoreUpdateNotice() {
+  state.updateNoticeVersion = null;
+  const key = updateNoticeStorageKey();
+  if (!key) return;
+  try {
+    const version = localStorage.getItem(key);
+    if (version && /^[A-Za-z0-9.+-]{1,80}$/.test(version)) state.updateNoticeVersion = version;
+  } catch {}
+}
+
+function rememberUpdateNotice(version) {
+  state.updateNoticeVersion = version || null;
+  const key = updateNoticeStorageKey();
+  if (!key) return;
+  try {
+    if (version && /^[A-Za-z0-9.+-]{1,80}$/.test(version)) localStorage.setItem(key, version);
+    else localStorage.removeItem(key);
+  } catch {}
+}
+
+function renderUpdateIndicator() {
+  const button = document.querySelector('.nav-item[data-view="settings"]');
+  if (!button) return;
+  if (!state.updateNoticeVersion) {
+    button.removeAttribute('data-update-available');
+    button.removeAttribute('aria-label');
+    button.removeAttribute('title');
+    return;
+  }
+  button.setAttribute('data-update-available', 'true');
+  button.setAttribute('aria-label', `Настройки. Доступно обновление Finance ${state.updateNoticeVersion}`);
+  button.setAttribute('title', `Доступно обновление Finance ${state.updateNoticeVersion}`);
+}
+
+async function checkForUpdates({ manual = false } = {}) {
+  const channel = state.settings?.updates?.channel;
+  if (!manual && !['beta', 'stable'].includes(channel)) return;
+  if (updateCheckRequest) return updateCheckRequest;
+
+  state.updateChecking = true;
+  if (manual) state.updateCheckError = null;
+  if (state.view === 'settings') renderSettings();
+
+  const pending = request('/api/updates/check')
+    .then((result) => {
+      state.updateCheck = result;
+      state.updateCheckError = null;
+      rememberUpdateNotice(result.enabled && result.update?.version ? result.update.version : null);
+    })
+    .catch((error) => {
+      state.updateCheckError = error.message;
+    });
+  updateCheckRequest = pending;
+  try {
+    await pending;
+  } finally {
+    if (updateCheckRequest === pending) updateCheckRequest = null;
+    state.updateChecking = false;
+    renderUpdateIndicator();
+    if (state.view === 'settings') renderSettings();
+  }
+}
+
+function maybeCheckForUpdatesAutomatically() {
+  if (automaticUpdateCheckStarted) return;
+  automaticUpdateCheckStarted = true;
+  if (['beta', 'stable'].includes(state.settings?.updates?.channel)) void checkForUpdates();
+}
+
 document.addEventListener('input', (event) => { if (event.target.closest('form')) draftDirty = true; });
 async function loadData({ automatic = false } = {}) {
   const sequence = ++loadSequence;
@@ -175,12 +255,14 @@ async function loadData({ automatic = false } = {}) {
   if (sequence !== loadSequence || state.data !== previous || (automatic && (draftDirty || dialog.open))) return;
   state.data = data;
   state.settings = settings;
+  restoreUpdateNotice();
   state.month ||= data.summaryMonth || localIsoDate().slice(0, 7);
   state.operationMonth ||= localIsoDate().slice(0, 7);
   document.querySelector('#workbook-name').textContent = data.workbook;
   document.querySelector('#workbook-name').dataset.asOfDate = data.asOfDate;
   document.querySelector('#workbook-name').dataset.revision = data.revision;
   render();
+  maybeCheckForUpdatesAutomatically();
 }
 
 function refreshIfStale() {
@@ -759,20 +841,28 @@ function renderSettings() {
   const updates = settings.updates || {};
   const settingRow = (label, value) => `<div class="setting-row"><span>${esc(label)}</span><strong title="${esc(value || '—')}">${esc(value || '—')}</strong></div>`;
   const updateInfo = state.updateCheck;
+  const availableUpdate = updateInfo?.enabled && updateInfo.update
+    ? `<p class="update-message">Доступна версия <strong>${esc(updateInfo.update.version)}</strong> (${updateInfo.update.channel === 'beta' ? 'beta' : 'стабильная'}).</p>${updateInfo.update.notes ? `<pre class="update-notes">${esc(updateInfo.update.notes)}</pre>` : ''}<div class="settings-actions settings-actions-wrap"><a class="secondary-button update-release-link" href="${esc(updateInfo.update.url)}" target="_blank" rel="noopener">Описание выпуска</a><button class="primary-button" type="button" data-install-update="${esc(updateInfo.update.version)}">Скачать и установить</button></div>`
+    : '';
   const updateResult = state.updateInstallQueued
     ? '<p class="update-message">Установщик запущен. Завершите установку в его окне; Finance перезапустится после неё.</p>'
     : state.updateChecking
-    ? '<p class="update-message">Проверяем опубликованные версии…</p>'
-    : updateInfo?.error
-      ? `<p class="update-message update-error">${esc(updateInfo.error)}</p>`
+      ? `<p class="update-message">Проверяем опубликованные версии…</p>${availableUpdate}`
+      : state.updateCheckError
+      ? `<p class="update-message update-error">${esc(state.updateCheckError)}</p>${availableUpdate}`
       : updateInfo?.enabled === false
         ? '<p class="update-message">Проверка обновлений доступна в установленной версии Finance.</p>'
         : updateInfo?.update
-          ? `<p class="update-message">Доступна версия <strong>${esc(updateInfo.update.version)}</strong> (${updateInfo.update.channel === 'beta' ? 'beta' : 'стабильная'}).</p>${updateInfo.update.notes ? `<pre class="update-notes">${esc(updateInfo.update.notes)}</pre>` : ''}<div class="settings-actions settings-actions-wrap"><a class="secondary-button update-release-link" href="${esc(updateInfo.update.url)}" target="_blank" rel="noopener">Описание выпуска</a><button class="primary-button" type="button" data-install-update="${esc(updateInfo.update.version)}">Скачать и установить</button></div>`
+          ? availableUpdate
           : updateInfo?.enabled
             ? '<p class="update-message">Установлена последняя доступная версия для этого канала.</p>'
-            : '<p class="update-message">Проверка выполняется только по запросу. Финансовые данные при этом не отправляются.</p>';
+            : ['beta', 'stable'].includes(updates.channel)
+              ? '<p class="update-message">Проверка выполняется при запуске Finance и по запросу. Финансовые данные при этом не отправляются.</p>'
+              : '<p class="update-message">Проверка обновлений доступна в установленной версии Finance.</p>';
   const channelLabel = updates.channel === 'beta' ? 'beta: beta и стабильные версии' : updates.channel === 'stable' ? 'стабильный: только стабильные версии' : 'сборка разработчика';
+  const updateDescription = ['beta', 'stable'].includes(updates.channel)
+    ? 'Finance проверяет новые версии при запуске. Загрузка и установка начинаются только по вашей команде.'
+    : 'Проверка обновлений доступна в установленной версии Finance.';
   const rollbackLabel = updates.rollbackVersion === 'legacy' ? 'предыдущую установленную версию' : `версию ${updates.rollbackVersion || ''}`;
   const recoveryFileLabel = state.recoveryFile
     ? `${state.recoveryFile.name} · ${number(state.recoveryFile.size / 1024 / 1024, 1)} МБ`
@@ -800,7 +890,7 @@ function renderSettings() {
         ${settingRow('Ожидают удаления', sync.cleanupPending ?? 0)}${sync.lastError ? settingRow('Последняя ошибка', sync.lastError) : ''}
         <div class="settings-actions settings-actions-wrap"><button class="secondary-button" type="button" data-open-folder="sync">Открыть папку Syncthing</button><button class="secondary-button" type="button" data-export-mobile>Обновить данные Obsidian</button></div>
       </article>
-      <article class="card settings-card settings-update-card"><div class="card-head"><div><h2>Обновление Finance</h2><p>Версии устанавливаются отдельно от книги и пользовательских настроек.</p></div></div>
+      <article class="card settings-card settings-update-card"><div class="card-head"><div><h2>Обновление Finance</h2><p>${updateDescription}</p></div></div>
         ${settingRow('Текущая версия', updates.version || 'неизвестна')}${settingRow('Канал', channelLabel)}
         ${updateResult}
         <div class="settings-actions settings-actions-wrap"><button class="secondary-button" type="button" data-check-update ${state.updateChecking ? 'disabled' : ''}>Проверить обновления</button>${updates.rollbackVersion ? `<button class="danger-button" type="button" data-rollback-version="${esc(updates.rollbackVersion)}">Вернуть ${esc(rollbackLabel)}</button>` : ''}</div>
@@ -818,6 +908,7 @@ function render() {
     button.classList.toggle('active', active);
     if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
   });
+  renderUpdateIndicator();
   ({ overview: renderOverview, operations: renderOperations, balance: renderBalance, savings: renderSavings, lists: renderLists, phone: renderPhoneSetup, settings: renderSettings }[state.view] || renderOverview)();
 }
 
@@ -1087,12 +1178,7 @@ document.addEventListener('click', async (event) => {
   }
   const checkUpdateButton = event.target.closest('[data-check-update]');
   if (checkUpdateButton) {
-    state.updateChecking = true;
-    state.updateCheck = null;
-    renderSettings();
-    try { state.updateCheck = await request('/api/updates/check'); }
-    catch (error) { state.updateCheck = { error: error.message }; }
-    finally { state.updateChecking = false; renderSettings(); }
+    await checkForUpdates({ manual: true });
     return;
   }
   const installUpdateButton = event.target.closest('[data-install-update]');
@@ -1108,7 +1194,7 @@ document.addEventListener('click', async (event) => {
       notify('Установщик запущен. Подтвердите установку в окне Finance; приложение откроется после завершения.');
     } catch (error) {
       notify(error.message, 'error');
-      state.updateCheck = { error: error.message };
+      state.updateCheckError = error.message;
       renderSettings();
     }
     return;
