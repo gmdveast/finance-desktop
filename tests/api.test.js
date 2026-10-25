@@ -36,14 +36,14 @@ async function jsonRequest(baseUrl, route, options = {}) {
   return { response, payload };
 }
 
-async function setup(t, legacy = false) {
+async function setup(t, legacy = false, historyRows = 0) {
   const restoreClock = installTestClock();
   t.after(restoreClock);
   const sandbox = await mkdtemp(path.join(tmpdir(), 'finance-workbook-test-'));
   const workbook = path.join(sandbox, 'finance-test.xlsx');
   const backups = path.join(sandbox, 'backups');
   const cbrCache = path.join(sandbox, 'cbr-rates.json');
-  await createFixture(workbook);
+  await createFixture(workbook, { historyRows });
   await mkdir(backups);
 
   const cbrPort = await freePort();
@@ -111,7 +111,15 @@ function defineScenarios(context, scenario) {
   scenario('отдаёт интерфейс и структуру всех листов', async () => {
     const page = await fetch(baseUrl);
     assert.equal(page.status, 200);
-    assert.match(await page.text(), /Финансовый журнал/);
+    const pageHtml = await page.text();
+    assert.match(pageHtml, /Финансовый журнал/);
+    assert.match(pageHtml, /\/assets\/finance-icon\.png/);
+    const logo = await fetch(`${baseUrl}/assets/finance-icon.png`);
+    assert.equal(logo.status, 200);
+    assert.match(logo.headers.get('content-type') || '', /image\/png/u);
+    const logoBytes = Buffer.from(await logo.arrayBuffer());
+    assert.equal(logoBytes.readUInt32BE(16), 1000);
+    assert.equal(logoBytes.readUInt32BE(20), 1000);
     const { response, payload } = await jsonRequest(baseUrl, '/api/data');
     assert.equal(response.status, 200);
     assert.equal(payload.workbook, 'finance-test.xlsx');
@@ -369,8 +377,52 @@ function defineScenarios(context, scenario) {
     const operation = data.operations.find((item) => item.id === operationId);
     assert.equal(operation.notes, 'API-тест');
     assert.equal(operation.rubAmount, 10);
+    assert.ok(Number.isFinite(Date.parse(operation.recordedAt)));
+    const workbookAfterSave = await loadWorkbook();
+    assert.equal(workbookAfterSave.getWorksheet('Операции').getCell(operationId, 19).value, operation.recordedAt);
+    assert.ok(Array.from(workbookAfterSave.getWorksheet('Операции').document.getElementsByTagNameNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'col'))
+      .some((column) => Number(column.getAttribute('min')) <= 19 && Number(column.getAttribute('max')) >= 19 && column.getAttribute('hidden') === '1'));
     const balanceSnapshot = JSON.parse(await readFile(path.join(process.env.FINANCE_SYNC_DIR, 'config', 'balances.json'), 'utf8'));
     assert.deepEqual(balanceSnapshot.accounts.map((account) => account.balance), data.accounts.map((account) => account.calculatedBalance));
+  });
+
+  scenario('время события сохраняется, управляет порядком одного дня и переживает редактирование', async () => {
+    const earlyAt = '2026-10-14T06:15:00.000Z';
+    const lateAt = '2026-10-14T15:45:00+03:00';
+    const incoming = path.join(process.env.FINANCE_SYNC_DIR, 'incoming');
+    await mkdir(incoming, { recursive: true });
+    const events = [
+      { schema: 1, id: 'time-order-early', author: 'owner', createdAt: earlyAt, operation: { date: '2026-10-14', type: 'Доход', category: 'Работа / зарплата', amount: 2, currency: 'RUB', accountId: 5 } },
+      { schema: 1, id: 'time-order-late', author: 'owner', createdAt: lateAt, operation: { date: '2026-10-14', type: 'Доход', category: 'Работа / зарплата', amount: 3, currency: 'RUB', accountId: 5 } },
+    ];
+    await Promise.all(events.map((event) => writeFile(path.join(incoming, `${event.id}.json`), JSON.stringify(event), 'utf8')));
+    const receipts = await importInboxOnce(process.env.FINANCE_SYNC_DIR);
+    assert.deepEqual(receipts.map((item) => item.status), ['imported', 'imported']);
+    let data = (await jsonRequest(baseUrl, '/api/data')).payload;
+    const early = data.operations.find((item) => item.sourceId === 'time-order-early');
+    const late = data.operations.find((item) => item.sourceId === 'time-order-late');
+    assert.deepEqual(data.operations.slice(0, 2).map((item) => item.id), [late.id, early.id]);
+    assert.equal(early.recordedAt, earlyAt);
+    assert.equal(late.recordedAt, '2026-10-14T12:45:00.000Z');
+    const edited = await send(`/api/operations/${late.id}`, { notes: 'timestamp preserved' }, 'PUT');
+    assert.equal(edited.response.status, 200);
+    data = (await jsonRequest(baseUrl, '/api/data')).payload;
+    assert.equal(data.operations.find((item) => item.id === late.id).recordedAt, late.recordedAt);
+  });
+
+  scenario('не назначает время старой операции и сохраняет пустую метку при редактировании', async () => {
+    const before = (await jsonRequest(baseUrl, '/api/data')).payload;
+    const legacy = before.operations.find((item) => item.id === 5);
+    assert.ok(legacy);
+    assert.equal(legacy.recordedAt, null);
+    const edited = await send(`/api/operations/${legacy.id}`, {
+      date: legacy.date, type: legacy.type, category: legacy.category, amount: legacy.amount,
+      currency: legacy.currency, rate: legacy.rate, accountId: legacy.accountId, notes: 'legacy blank timestamp',
+    }, 'PUT');
+    assert.equal(edited.response.status, 200);
+    assert.equal(edited.payload.data.operations.find((item) => item.id === legacy.id).recordedAt, null);
+    const workbookAfterEdit = await loadWorkbook();
+    assert.equal(workbookAfterEdit.getWorksheet('Операции').getCell(legacy.id, 19).value, null);
   });
 
   scenario('редактирует и удаляет операцию', async () => {
@@ -392,6 +444,8 @@ function defineScenarios(context, scenario) {
     assert.equal(updated.payload.data.operations.find((item) => item.id === operationId).notes, 'Исправленная запись');
     const removed = await jsonRequest(baseUrl, `/api/operations/${operationId}`, { method: 'DELETE' });
     assert.equal(removed.response.status, 200);
+    const workbookAfterDelete = await loadWorkbook();
+    assert.equal(workbookAfterDelete.getWorksheet('Операции').getCell(operationId, 19).value, null);
     assert.ok(!removed.payload.data.operations.some((item) => item.id === operationId));
   });
 
@@ -673,7 +727,9 @@ function defineScenarios(context, scenario) {
     assert.equal(repeated[0].sourceDeleted, true);
     await assert.rejects(readFile(sourceFile));
     const data = (await jsonRequest(baseUrl, '/api/data')).payload;
-    assert.equal(data.operations.filter((item) => item.sourceId === event.id).length, 1);
+    const imported = data.operations.find((item) => item.sourceId === event.id);
+    assert.ok(imported);
+    assert.equal(imported.recordedAt, new Date(event.createdAt).toISOString());
     const receipt = JSON.parse(await readFile(path.join(syncRoot, 'receipts', `${event.id}.json`), 'utf8'));
     assertContract('receipt', receipt);
     assert.equal(receipt.status, 'imported');
@@ -993,23 +1049,24 @@ function defineScenarios(context, scenario) {
       sheet.getCell(row, 5).value = 17;
       sheet.getCell(row, 12).value = `event-${row}`;
     }
+    sheet.getCell(end, 19).value = '2026-10-14T10:20:30.000Z';
     sheet.getCell(end, 12).value = { formula: '"event-formula"', result: 'event-formula' };
     const result = ensureOperationCapacity(excel);
     assert.equal(result.added, 100);
     assert.equal(result.available, 100);
     for (let row = end + 1; row <= result.endRow; row += 1) {
-      for (const col of [1,2,3,4,5,6,7,9,10,11,12,13,14,15,16,17,18]) assert.ok(!sheet.getCell(row, col).value);
+      for (const col of [1,2,3,4,5,6,7,9,10,11,12,13,14,15,16,17,18,19]) assert.ok(!sheet.getCell(row, col).value);
     }
     assert.equal(sheet.getCell(end, 5).value, 17);
   });
 
   scenario('audit: фикстура очищает скрытые поля и оба учёта', async () => {
     const excel = await loadWorkbook();
-    for (const col of [16,17,18]) excel.getWorksheet('Операции').getCell(5, col).value = 'sentinel';
+    for (const col of [16,17,18,19]) excel.getWorksheet('Операции').getCell(5, col).value = 'sentinel';
     for (const col of [13,14]) excel.getWorksheet('Баланс').getCell(5, col).value = 'sentinel';
     excel.getWorksheet('Баланс').getCell(1, 14).value = 'sentinel';
     resetFinancialRows(excel, null);
-    for (const col of [16,17,18]) assert.ok(!excel.getWorksheet('Операции').getCell(5, col).value);
+    for (const col of [16,17,18,19]) assert.ok(!excel.getWorksheet('Операции').getCell(5, col).value);
     for (const col of [13,14]) assert.ok(!excel.getWorksheet('Баланс').getCell(5, col).value);
     assert.ok(!excel.getWorksheet('Баланс').getCell(1, 14).value);
     for (const name of ['Накопления', 'Движение накоплений', 'Начальные балансы']) {
@@ -1274,12 +1331,9 @@ function defineScenarios(context, scenario) {
     const id = saving.payload.result.id;
     await send(`/api/savings/accounts/${id}/increase`, { amount: 10, date: '2026-10-14' });
     await send('/api/operations', { date: '2026-10-14', type: 'Инвестиция', amount: 5, currency: 'RUB', rate: 1, accountId: 5, savingsAccountId: id, destinationAmount: 5 });
-    const fixture = await loadWorkbook();
-    fixture.getWorksheet('Операции').getCell(5, 19).value = 'Unrelated column';
-    await fixture.writeFile(workbook);
     const history = await send('/api/settings/clear-data', { mode: 'history', confirmation: 'УДАЛИТЬ ИСТОРИЮ' });
-    assert.equal((await loadWorkbook()).getWorksheet('Операции').getCell(5, 19).value, 'Unrelated column');
     assert.equal(history.response.status, 200);
+    assert.equal((await loadWorkbook()).getWorksheet('Операции').getCell(5, 19).value, null);
     assert.equal(history.payload.data.accounts.find((a) => a.id === 5).calculatedBalance, 100);
     assert.equal(history.payload.data.savingsAccounts[0].calculatedBalance, 200);
     assert.deepEqual(history.payload.data.savingsAccounts[0].movements, []);
@@ -1536,7 +1590,7 @@ const names = [];
 defineScenarios({}, (name) => names.push(name));
 if (process.env.FINANCE_TEST_REVERSE === '1') names.reverse();
 for (const name of names) test(name, async (t) => {
-  const context = await setup(t, name.startsWith('мигрирует книгу'));
+  const context = await setup(t, name.startsWith('мигрирует книгу'), name.startsWith('не назначает время старой операции') ? 1 : 0);
   let run;
   defineScenarios(context, (candidate, body) => { if (candidate === name) run = body; });
   await run(t);

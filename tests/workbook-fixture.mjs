@@ -10,7 +10,7 @@ export function resetFinancialRows(workbook, account = {}) {
   balances.getCell(1, 14).value = null;
 
   for (let row = 5; row <= operationEndRow; row += 1) {
-    for (const column of [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]) clear(operations, row, column);
+    for (const column of [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]) clear(operations, row, column);
   }
   operations.getCell(operationEndRow, 8).value = {
     formula: `IF(OR(E${operationEndRow}="",F${operationEndRow}=""),"",IF(F${operationEndRow}="RUB",E${operationEndRow},IF(G${operationEndRow}="", "",E${operationEndRow}*G${operationEndRow})))`,

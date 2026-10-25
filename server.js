@@ -19,6 +19,7 @@ import { exportRecoveryBundle, verifyRecoveryBundle, rehearseRecoveryContents } 
 import { authorizedShutdown, publishRuntime, removeRuntime } from './lib/runtime-control.mjs';
 import { startFirstRunApplication } from './lib/first-run.mjs';
 import { createUpdateService } from './lib/update-service.mjs';
+import { createClientPresence, validClientId } from './lib/client-presence.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const packageInfo = await readFile(path.join(__dirname, 'package.json'), 'utf8').then(JSON.parse).catch(() => ({}));
@@ -68,6 +69,7 @@ const syncRuns = new Map();
 let cbrCacheLoadPromise = null;
 let cbrCacheWriteQueue = Promise.resolve();
 let shuttingDown = false;
+let clientPresence = null;
 const importerStops = new Set();
 const workbookStore = new WorkbookStore({ file: WORKBOOK_PATH, backupDirectory: BACKUP_DIR, validate: validateWorkbookFile });
 let runtimeControl = null;
@@ -102,6 +104,16 @@ app.use((req, _res, next) => {
   try { if (req.body !== undefined) object(req.body); next(); } catch (error) { next(error); }
 });
 app.use((_req, res, next) => shuttingDown ? res.status(503).json({ error: 'Приложение завершает текущие операции и останавливается.', code: 'SHUTTING_DOWN', retryable: true }) : next());
+app.post('/api/system/presence', (req, res) => {
+  if (!clientPresence) return res.status(404).json({ error: 'Регистрация вкладок недоступна.', code: 'NOT_FOUND', retryable: false });
+  const { clientId, active } = req.body || {};
+  if (!validClientId(clientId) || (active !== undefined && typeof active !== 'boolean')) {
+    return res.status(400).json({ error: 'Некорректный идентификатор вкладки.', code: 'VALIDATION', retryable: false });
+  }
+  const accepted = active === false ? clientPresence.release(clientId) : clientPresence.heartbeat(clientId);
+  if (!accepted) return res.status(410).json({ error: 'Приложение завершает работу.', code: 'SHUTTING_DOWN', retryable: false });
+  res.status(204).end();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 const clean = (value) => String(value ?? '').trim();
@@ -584,7 +596,7 @@ function readOperations(workbook) {
   const sheet = workbook.getWorksheet('Операции');
   const operations = [];
   for (let row = 5; row <= sheet.rowCount; row += 1) {
-    const values = [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].map((column) => sheet.getCell(row, column).value);
+    const values = [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map((column) => sheet.getCell(row, column).value);
     if (!values.some((value) => clean(value))) continue;
     const amount = asNumber(sheet.getCell(row, 5).value);
     const currency = clean(sheet.getCell(row, 6).value);
@@ -609,16 +621,20 @@ function readOperations(workbook) {
       savingsTransfer: clean(sheet.getCell(row, 16).value),
       savingsAccountId: asNumber(sheet.getCell(row, 17).value) || null,
       savingsAmount: asNumber(sheet.getCell(row, 18).value),
+      recordedAt: timestamp(clean(sheet.getCell(row, 19).value)) ? new Date(sheet.getCell(row, 19).value).toISOString() : null,
     });
   }
-  return operations.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
+  return operations.sort((a, b) => b.date.localeCompare(a.date)
+    || (a.recordedAt && b.recordedAt ? b.recordedAt.localeCompare(a.recordedAt)
+      : a.recordedAt ? -1 : b.recordedAt ? 1 : 0)
+    || b.id - a.id);
 }
 
 export function operationCapacity(workbook) {
   const sheet = workbook.getWorksheet('\u041e\u043f\u0435\u0440\u0430\u0446\u0438\u0438');
   let used = 0;
   for (let row = 5; row <= sheet.rowCount; row += 1) {
-    if ([1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].some((column) => clean(sheet.getCell(row, column).value))) used += 1;
+    if ([1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].some((column) => clean(sheet.getCell(row, column).value))) used += 1;
   }
   return { startRow: 5, endRow: sheet.rowCount, total: Math.max(0, sheet.rowCount - 4), used, available: Math.max(0, sheet.rowCount - 4 - used) };
 }
@@ -1112,6 +1128,11 @@ function writeOperation(sheet, row, operation) {
   sheet.getCell(row, 16).value = operation.savingsTransfer || null;
   sheet.getCell(row, 17).value = operation.savingsAccountId || null;
   sheet.getCell(row, 18).value = operation.savingsTransfer ? operation.savingsAmount : null;
+  const recordedAt = Object.hasOwn(operation, 'recordedAt')
+    ? (timestamp(operation.recordedAt || '') ? new Date(operation.recordedAt).toISOString() : null)
+    : (timestamp(operation.sourceCreatedAt || '') ? new Date(operation.sourceCreatedAt).toISOString() : new Date().toISOString());
+  sheet.getCell(row, 19).value = recordedAt;
+  sheet.hideColumn(19);
   if (operation.savingsTransfer) {
     sheet.hideColumn(16); sheet.hideColumn(17); sheet.hideColumn(18);
   }
@@ -1246,7 +1267,7 @@ export function migrateStreamlinedModel(workbook) {
   return { changed: true };
 }
 
-async function createOperation(body, options) {
+async function createOperation(body, options = {}) {
   return mutateWorkbook(async (workbook) => {
     if (body.sourceId && await isResetEvent(workbook, body.sourceId, body.sourceCreatedAt)) {
       return { skipSave: true, result: { discarded: true, duplicate: true } };
@@ -1262,6 +1283,7 @@ async function createOperation(body, options) {
       }
     }
     const operation = validateOperation(body);
+    if (options.recordedAt !== undefined) operation.recordedAt = options.recordedAt;
     validateOperationAccounts(workbook, operation);
     if (operation.type === 'Перевод') operation.rate = (await fetchCbrRate(operation.currency, operation.date)).rate;
     await prepareOperationReferenceRates(workbook, operation);
@@ -1272,7 +1294,7 @@ async function createOperation(body, options) {
     }
     let targetRow = 0;
     for (let row = 5; row <= sheet.rowCount; row += 1) {
-      const hasData = [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18].some((column) => clean(sheet.getCell(row, column).value));
+      const hasData = [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].some((column) => clean(sheet.getCell(row, column).value));
       if (!hasData) { targetRow = row; break; }
     }
     if (!targetRow) {
@@ -1470,7 +1492,7 @@ async function scanInboxOnce(rootDirectory) {
           assertIdentityAvailable(knownIdentity);
           if (!knownIdentity.events.has(identity.id) && !(await isResetEvent(snapshot, identity.id, event.createdAt))) operation.rate = (await fetchCbrRate(clean(operation.currency), clean(operation.date))).rate;
         }
-        const payload = await createOperation(operation, { publish: false, includeData: false });
+        const payload = await createOperation(operation, { publish: false, includeData: false, recordedAt: event.createdAt });
         const receipt = {
           schema: 1,
           id: identity.id,
@@ -1696,7 +1718,7 @@ app.post('/api/settings/clear-data', async (req, res, next) => {
       const previous = await resetState(workbook);
       const reset = { schema: 1, cutoff: [previous?.cutoff, new Date().toISOString()].filter(Boolean).sort().at(-1), ids: [...new Set([...(previous?.ids || []), ...identityState(workbook).events])] };
       const operations = workbook.getWorksheet('Операции');
-      clearSheetRows(operations, 5, 18, new Set([8]));
+      clearSheetRows(operations, 5, 19, new Set([8]));
       for (let row = 5; row <= operations.rowCount; row += 1) {
         operations.getCell(row, 8).value = { formula: `IF(OR(E${row}="",F${row}=""),"",IF(F${row}="RUB",E${row},IF(G${row}="","",E${row}*G${row})))`, result: '' };
       }
@@ -1923,12 +1945,13 @@ app.post('/api/savings/transfers', async (req, res, next) => {
       if (savings.currency === main.currency && savingAmount !== mainAmount) throw new InputError('Суммы перевода в одной валюте должны совпадать.');
       const operations = workbook.getWorksheet('Операции');
       let row = 0;
-      for (let candidate = 5; candidate <= operations.rowCount; candidate += 1) if (![1,2,3,4,5,6,7,9,10,11,12,13,14,15,16,17,18].some((column) => clean(operations.getCell(candidate, column).value))) { row = candidate; break; }
+      for (let candidate = 5; candidate <= operations.rowCount; candidate += 1) if (![1,2,3,4,5,6,7,9,10,11,12,13,14,15,16,17,18,19].some((column) => clean(operations.getCell(candidate, column).value))) { row = candidate; break; }
       if (!row) { ensureOperationCapacity(workbook); row = operations.rowCount - 99; }
       const operation = { date, type: 'Перевод', amount: savingAmount, currency: savings.currency, rate: 1, accountId: null, destinationAccountId: mainId, destinationAmount: mainAmount, savingsTransfer: direction, savingsAccountId: savingId, savingsAmount: savingAmount };
       operation.rate = (await fetchCbrRate(operation.currency, operation.date)).rate;
       if (savings.currency !== main.currency) await Promise.all([savings.currency, main.currency].map((currency) => prepareReferenceRate(currency, date)));
       if (operation.amount * operation.rate > 1e12) throw new InputError('Рублёвый эквивалент превышает 1e12.');
+      operation.recordedAt = new Date().toISOString();
       writeOperation(operations, row, operation);
       const { movements } = savingsSheets(workbook);
       const movementRow = Math.max(2, movements.rowCount + 1);
@@ -1981,7 +2004,7 @@ app.put('/api/operations/:id', async (req, res, next) => {
         const operation = {
           date, type: 'Перевод', category: '', amount: savingAmount, currency: savings.currency, rate: 1, necessity: '', notes,
           sourceId: previous.sourceId, accountId: null, destinationAccountId: mainId, destinationAmount: mainAmount,
-          savingsTransfer: 'from-savings', savingsAccountId: savingId, savingsAmount: savingAmount,
+          savingsTransfer: 'from-savings', savingsAccountId: savingId, savingsAmount: savingAmount, recordedAt: previous.recordedAt,
         };
         operation.rate = previous.date === date && previous.currency === savings.currency && previous.rate > 0 && previous.rate !== 1
           ? previous.rate : (await fetchCbrRate(operation.currency, operation.date)).rate;
@@ -2004,6 +2027,7 @@ app.put('/api/operations/:id', async (req, res, next) => {
       await prepareOperationReferenceRates(workbook, operation);
       if (operation.amount * operation.rate > 1e12) throw new InputError('Рублёвый эквивалент превышает 1e12.');
       operation.sourceId ||= clean(sheet.getCell(row, 12).value);
+      operation.recordedAt = previous.recordedAt;
       writeOperation(sheet, row, operation);
       if (linkedKind === 'investment') {
         const movements = workbook.getWorksheet('Движение накоплений');
@@ -2051,7 +2075,7 @@ app.delete('/api/operations/:id', async (req, res, next) => {
         }
         for (let column = 1; column <= 6; column += 1) movements.getCell(movementRow, column).value = null;
       }
-      for (const column of [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]) sheet.getCell(row, column).value = null;
+      for (const column of [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]) sheet.getCell(row, column).value = null;
       sheet.getCell(row, 8).value = { formula: `IF(OR(E${row}="",F${row}=""),"",IF(F${row}="RUB",E${row},IF(G${row}="", "",E${row}*G${row})))`, result: '' };
       return { id: row };
     });
@@ -2511,7 +2535,7 @@ export function shutdownApplication(server) {
   return shutdownPromise;
 }
 
-export async function startApplication(port = PORT) {
+export async function startApplication(port = PORT, { presenceOptions = {} } = {}) {
   const applicationDirectories = new Set([
     DATA_DIR,
     path.dirname(CONFIG_PATH),
@@ -2537,24 +2561,31 @@ export async function startApplication(port = PORT) {
       dataDirectory: DATA_DIR,
       syncDirectory: SYNC_DIR,
       workbookStore,
-      onInstalled: (boundPort) => startApplication(boundPort ?? port),
+      presenceOptions,
+      onInstalled: (boundPort) => startApplication(boundPort ?? port, { presenceOptions }),
     });
   }
   const release = await acquireWorkbookLock(WORKBOOK_PATH, { purpose: 'server', timeout: 0 });
   let server;
   let descriptor;
+  const browserLifecycle = process.env.FINANCE_BROWSER_LIFECYCLE === '1';
   try {
     await workbookStore.exclusive(() => validateWorkbookFile(WORKBOOK_PATH));
+    if (browserLifecycle) clientPresence = createClientPresence({ ...presenceOptions, onEmpty: () => runtimeControl?.stop() });
     server = startServer(port);
     await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
     descriptor = await publishRuntime(WORKBOOK_PATH, server.address().port);
   } catch (error) {
     if (server?.listening) await new Promise((resolve) => server.close(resolve));
+    clientPresence?.dispose();
+    clientPresence = null;
     await release();
     throw error;
   }
   let stopPromise;
   const stop = () => stopPromise ||= (async () => {
+    clientPresence?.dispose();
+    clientPresence = null;
     await shutdownApplication(server);
     try { await removeRuntime(WORKBOOK_PATH, descriptor); }
     finally {

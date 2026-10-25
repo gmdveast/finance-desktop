@@ -96,10 +96,11 @@ foreach ($entry in @('server.js', 'package.json', 'package-lock.json', 'LICENSE'
   Copy-Item -LiteralPath (Join-Path $repoRoot $entry) -Destination $appStage -Force
 }
 $runtimeFiles = @(
-  'public\app.js', 'public\index.html', 'public\setup.css', 'public\setup.html', 'public\setup.js', 'public\styles.css',
-  'lib\first-run.mjs', 'lib\identity-state.mjs', 'lib\input-boundary.mjs', 'lib\recovery-bundle.mjs', 'lib\runtime-control.mjs', 'lib\update-service.mjs', 'lib\workbook-store.mjs',
+  'public\app.js', 'public\index.html', 'public\presence.js', 'public\setup.css', 'public\setup.html', 'public\setup.js', 'public\styles.css', 'public\i18n.js',
+  'lib\client-presence.mjs', 'lib\first-run.mjs', 'lib\identity-state.mjs', 'lib\input-boundary.mjs', 'lib\recovery-bundle.mjs', 'lib\runtime-control.mjs', 'lib\update-service.mjs', 'lib\workbook-store.mjs',
   'templates\finance-template.xlsx'
 )
+$runtimeFiles += @('public\assets\finance-icon.png', 'public\locales\en.json', 'public\locales\ru.json')
 foreach ($relativePath in $runtimeFiles) {
   $sourcePath = Join-Path $repoRoot $relativePath
   if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) { throw "Required runtime file is missing: $relativePath" }

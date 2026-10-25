@@ -1,5 +1,5 @@
 ﻿#ifndef AppVersion
-  #define AppVersion "1.0.1"
+  #define AppVersion "1.2.0"
 #endif
 #ifndef AppArch
   #define AppArch "x64"
@@ -46,8 +46,6 @@ Source: "{#StageDir}\scripts\finance-rollback.vbs"; DestDir: "{app}\scripts"; Fl
 
 [Icons]
 Name: "{group}\Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-start.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\versions\{#AppVersion}\finance.ico"; IconIndex: 0
-Name: "{group}\Выйти из Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-stop.vbs"""; WorkingDir: "{app}"
-Name: "{group}\Откатить версию Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-rollback.vbs"""; WorkingDir: "{app}"
 Name: "{autodesktop}\Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-start.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\versions\{#AppVersion}\finance.ico"; IconIndex: 0; Tasks: desktopicon
 Name: "{userstartup}\Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-start.vbs"""; WorkingDir: "{app}"; Tasks: autostart
 
@@ -176,6 +174,9 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
+    { Remove Start Menu links created by older releases; Finance remains the only app link. }
+    DeleteFile(ExpandConstant('{group}\Выйти из Finance.lnk'));
+    DeleteFile(ExpandConstant('{group}\Откатить версию Finance.lnk'));
     PreviousVersion := '';
     if not RegQueryStringValue(HKCU, 'Software\FinanceDesktop', 'CurrentVersion', PreviousVersion) then
     begin

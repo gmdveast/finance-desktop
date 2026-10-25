@@ -15,6 +15,7 @@ export default defineConfig({
   reporter: [['list'], ['html', { open: 'never', outputFolder: `playwright-report/${runId}` }]],
   use: {
     headless: true,
+    locale: 'ru-RU',
     timezoneId: 'Europe/Moscow',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',

@@ -57,6 +57,7 @@ function setStorageEnvironment() {
   process.env.BACKUP_DIR = path.join(dataDirectory, 'backups');
   process.env.CBR_CACHE_PATH = path.join(dataDirectory, 'cbr-rates.json');
   process.env.FINANCE_SYNC_DIR = syncDirectory;
+  process.env.FINANCE_BROWSER_LIFECYCLE = '1';
   process.env.PORT = String(preferredPort);
   process.env.NODE_ENV = 'production';
   process.env.FINANCE_INSTALL_ROOT = installRoot;

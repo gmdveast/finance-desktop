@@ -12,6 +12,10 @@ export const test = base.extend({
       execArgv: [], env: { ...process.env, FINANCE_E2E_ROOT: directory }, silent: true,
     });
     let output = '';
+    const presenceEvents = [];
+    child.on('message', (message) => {
+      if (message?.type === 'presence-event') presenceEvents.push(message.event);
+    });
     child.stdout.on('data', (data) => { output += data; });
     child.stderr.on('data', (data) => { output += data; });
     const exited = new Promise((resolve) => child.once('exit', resolve));
@@ -22,7 +26,7 @@ export const test = base.extend({
         child.once('error', (error) => { clearTimeout(timer); reject(error); });
         child.once('exit', (code) => { clearTimeout(timer); reject(new Error(`Fixture exit ${code}: ${output}`)); });
       });
-      await use(server);
+      await use({ ...server, presenceEvents });
     } finally {
       if (child.connected) child.send('stop');
       const watchdog = setTimeout(() => child.kill(), 10000);

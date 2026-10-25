@@ -23,7 +23,8 @@ process.env.CBR_CACHE_PATH = path.join(testRoot, 'cbr-rates.json');
 process.env.FINANCE_SYNC_DIR = path.join(testRoot, 'mobile-sync');
 process.env.CBR_BASE_URL = `http://127.0.0.1:${cbrServer.address().port}/daily`;
 process.env.NODE_ENV = 'test';
-const { loadWorkbook, migrateAccountModel, migrateCategoryEmojis, migrateStreamlinedModel, startServer } = await import('../server.js');
+process.env.FINANCE_BROWSER_LIFECYCLE = '1';
+const { loadWorkbook, migrateAccountModel, migrateCategoryEmojis, migrateStreamlinedModel, startApplication } = await import('../server.js');
 const workbook = await loadWorkbook();
 migrateAccountModel(workbook, '2026-10-14');
 migrateStreamlinedModel(workbook);
@@ -31,13 +32,18 @@ migrateCategoryEmojis(workbook);
 const balance = workbook.getWorksheet('Баланс');
 for (const [col, value] of [[1, 'Долларовая карта'], [2, 'USD'], [4, 91.25]]) balance.getCell(5, col).value = value;
 await workbook.writeFile(process.env.WORKBOOK_PATH);
-const appServer = startServer(0);
-
-await new Promise((resolve) => appServer.once('listening', resolve));
+const application = await startApplication(0, { presenceOptions: { leaseMs: 120_000, shutdownGraceMs: 20_000, startupGraceMs: 90_000 } });
+const appServer = application.server;
+appServer.on('request', (req, res) => {
+  if (req.method !== 'POST' || req.url !== '/api/system/presence') return;
+  res.once('finish', () => {
+    if (process.connected) process.send({ type: 'presence-event', event: { body: req.body, statusCode: res.statusCode } });
+  });
+});
 process.send({ baseURL: `http://127.0.0.1:${appServer.address().port}`, syncRoot: process.env.FINANCE_SYNC_DIR });
 process.on('message', async (message) => {
   if (message !== 'stop') return;
-  await new Promise((resolve) => appServer.close(resolve));
+  await application.stop();
   await new Promise((resolve) => cbrServer.close(resolve));
   process.disconnect();
 });

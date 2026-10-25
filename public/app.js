@@ -1,3 +1,8 @@
+import './presence.js';
+import { applyTranslations, currentLocale, initializeLocale, localeCode, setLocale, translate, translateCount, translateError } from './i18n.js';
+
+await initializeLocale();
+
 const content = document.querySelector('#content');
 const dialog = document.querySelector('#operation-dialog');
 const operationForm = document.querySelector('#operation-form');
@@ -52,22 +57,17 @@ const state = {
 };
 
 const esc = (value = '') => String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
-const money = (value, currency = 'RUB') => new Intl.NumberFormat('ru-RU', { style: 'currency', currency, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(Number(value) || 0);
-const number = (value, digits = 2) => new Intl.NumberFormat('ru-RU', { maximumFractionDigits: digits }).format(Number(value) || 0);
-const dateLabel = (iso) => iso ? new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(`${iso}T12:00:00`)) : '—';
-const monthLabel = (iso) => new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' }).format(new Date(`${iso}-01T12:00:00`));
-const operationCountLabel = (count) => {
-  const remainder100 = count % 100;
-  const remainder10 = count % 10;
-  const word = remainder10 === 1 && remainder100 !== 11 ? 'операция' : remainder10 >= 2 && remainder10 <= 4 && (remainder100 < 12 || remainder100 > 14) ? 'операции' : 'операций';
-  return `${count} ${word}`;
-};
-const accountCountLabel = (count) => {
-  const remainder100 = count % 100;
-  const remainder10 = count % 10;
-  const word = remainder10 === 1 && remainder100 !== 11 ? 'активный счёт' : remainder10 >= 2 && remainder10 <= 4 && (remainder100 < 12 || remainder100 > 14) ? 'активных счёта' : 'активных счетов';
-  return `${count} ${word}`;
-};
+const ask = (message) => window.confirm(translate(message));
+const askText = (message) => window.prompt(translate(message));
+const tell = (message) => window.alert(translate(message));
+const money = (value, currency = 'RUB') => new Intl.NumberFormat(localeCode(), { style: 'currency', currency, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(Number(value) || 0);
+const number = (value, digits = 2) => new Intl.NumberFormat(localeCode(), { maximumFractionDigits: digits }).format(Number(value) || 0);
+const dateLabel = (iso) => iso ? new Intl.DateTimeFormat(localeCode(), { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(`${iso}T12:00:00`)) : '—';
+const timeLabel = (iso) => iso && Number.isFinite(Date.parse(iso)) ? new Intl.DateTimeFormat(localeCode(), { hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : '';
+const monthLabel = (iso) => new Intl.DateTimeFormat(localeCode(), { month: 'long', year: 'numeric' }).format(new Date(`${iso}-01T12:00:00`));
+const typeLabel = (type) => translate(type);
+const operationCountLabel = (count) => translateCount('operations', count);
+const accountCountLabel = (count) => translateCount('activeAccounts', count);
 const localIsoDate = () => {
   const now = new Date();
   const offset = now.getTimezoneOffset() * 60000;
@@ -112,7 +112,7 @@ async function request(url, options) {
   const response = await fetch(url, options);
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const error = new Error((payload.error || 'Ошибка соединения с сервером.') + (payload.retryable ? ' Можно повторить после устранения причины.' : ''));
+    const error = new Error(translateError(payload.code, payload.error || 'Ошибка соединения с сервером.', payload.retryable));
     error.code = payload.code; error.retryable = Boolean(payload.retryable); throw error;
   }
   return payload;
@@ -126,7 +126,7 @@ async function requestRecoveryFile(endpoint) {
     body: state.recoveryFile,
   });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || 'Не удалось проверить recovery-архив.');
+  if (!response.ok) throw new Error(translateError(payload.code, payload.error || 'Не удалось проверить recovery-архив.', payload.retryable));
   return payload;
 }
 
@@ -146,7 +146,7 @@ async function downloadRecoveryArchive() {
   const response = await fetch('/api/settings/recovery/export');
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
-    throw new Error(payload.error || 'Не удалось создать recovery-архив.');
+    throw new Error(translateError(payload.code, payload.error || 'Не удалось создать recovery-архив.', payload.retryable));
   }
   const archive = await response.blob();
   if (saveHandle) {
@@ -210,6 +210,7 @@ function renderUpdateIndicator() {
   button.setAttribute('data-update-available', 'true');
   button.setAttribute('aria-label', `Настройки. Доступно обновление Finance ${state.updateNoticeVersion}`);
   button.setAttribute('title', `Доступно обновление Finance ${state.updateNoticeVersion}`);
+  applyTranslations(button);
 }
 
 async function checkForUpdates({ manual = false } = {}) {
@@ -299,7 +300,8 @@ function categoryByName(name) {
 
 function categoryLabel(name) {
   const category = categoryByName(name);
-  return `${category?.emoji ? `${category.emoji} ` : ''}${name || 'Без категории'}`;
+  const label = !name ? translate('Без категории') : ['Вклад', 'Отложенные'].includes(name) ? translate(name) : name;
+  return `${category?.emoji ? `${category.emoji} ` : ''}${label}`;
 }
 
 function navigateTo(view, { replace = false } = {}) {
@@ -345,7 +347,7 @@ function renderOverview() {
   for (let i = 5; i >= 0; i -= 1) {
     const date = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1);
     const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-    const shortMonth = new Intl.DateTimeFormat('ru-RU', { month: 'short' }).format(date).replace('.', '');
+    const shortMonth = new Intl.DateTimeFormat(localeCode(), { month: 'short' }).format(date).replace('.', '');
     months.push({ key, label: `${shortMonth} ${String(date.getFullYear()).slice(-2)}`, fullLabel: monthLabel(key), ...totals(monthOperations(key)) });
   }
   const chartMax = Math.max(...months.flatMap((item) => [item.income, item.expense]), 1);
@@ -425,8 +427,8 @@ function operationTable(operations, actions = true, sortable = false) {
       : `<th${right ? ' style="text-align:right"' : ''}>${label}</th>`;
   };
   return `<div class="table-wrap${sortable ? ' operations-table-scroll' : ''}"${sortable ? ' role="region" aria-label="Таблица операций"' : ''}><table><thead><tr>${header('date', 'Дата')}<th>Заметка</th>${header('category', 'Категория')}${header('account', 'Счёт')}<th>Тип</th><th>Необходимость</th>${header('amount', 'Сумма', true)}${actions ? '<th>Действия</th>' : ''}</tr></thead><tbody>${operations.map((item) => `<tr class="keyboard-row" tabindex="0" data-keyboard-row data-operation-row="${item.id}" aria-label="Операция ${esc(item.notes || categoryLabel(item.category))}">
-    <td class="muted">${dateLabel(item.date)}</td><td class="operation-note"><span>${esc(item.notes || 'Без заметки')}</span>${operationSupplement(item)}</td>
-    <td>${item.type === 'Перевод' ? (item.savingsTransfer ? '🏦 Между учётами' : '🔁 Между счетами') : esc(categoryLabel(item.category))}</td><td class="account-route">${item.savingsTransfer === 'investment' ? `${esc(accountById(item.accountId)?.name || 'Счёт')} → ${esc(savingsAccountById(item.savingsAccountId)?.name || 'Накопления')}` : item.savingsTransfer === 'to-savings' ? `${esc(accountById(item.accountId)?.name || 'Счёт')} → ${esc(savingsAccountById(item.savingsAccountId)?.name || 'Накопления')}` : item.savingsTransfer === 'from-savings' ? `${esc(savingsAccountById(item.savingsAccountId)?.name || 'Накопления')} → ${esc(accountById(item.destinationAccountId)?.name || 'Счёт')}` : item.type === 'Перевод' ? `${esc(accountById(item.accountId)?.name || 'Счёт')} → ${esc(accountById(item.destinationAccountId)?.name || 'Счёт')}` : esc(accountById(item.accountId)?.name || 'История без счёта')}</td><td><span class="tag ${item.type === 'Расход' ? 'expense' : item.type === 'Инвестиция' ? 'investment' : item.type === 'Доход' ? 'income' : 'transfer'}">${esc(item.type)}</span></td><td>${item.type === 'Расход' && item.necessity ? `<span class="tag ${item.necessity === 'Гибкая' ? 'flex' : 'required'}">${esc(item.necessity)}</span>` : '<span class="muted">—</span>'}</td>
+    <td class="muted">${dateLabel(item.date)}${item.recordedAt ? `<br><time class="operation-time" datetime="${esc(item.recordedAt)}">${timeLabel(item.recordedAt)}</time>` : ''}</td><td class="operation-note"><span>${esc(item.notes || 'Без заметки')}</span>${operationSupplement(item)}</td>
+    <td class="operation-category-label">${item.type === 'Перевод' ? (item.savingsTransfer ? '🏦 Между учётами' : '🔁 Между счетами') : esc(categoryLabel(item.category))}</td><td class="account-route">${item.savingsTransfer === 'investment' ? `${esc(accountById(item.accountId)?.name || 'Счёт')} → ${esc(savingsAccountById(item.savingsAccountId)?.name || 'Накопления')}` : item.savingsTransfer === 'to-savings' ? `${esc(accountById(item.accountId)?.name || 'Счёт')} → ${esc(savingsAccountById(item.savingsAccountId)?.name || 'Накопления')}` : item.savingsTransfer === 'from-savings' ? `${esc(savingsAccountById(item.savingsAccountId)?.name || 'Накопления')} → ${esc(accountById(item.destinationAccountId)?.name || 'Счёт')}` : item.type === 'Перевод' ? `${esc(accountById(item.accountId)?.name || 'Счёт')} → ${esc(accountById(item.destinationAccountId)?.name || 'Счёт')}` : esc(accountById(item.accountId)?.name || 'История без счёта')}</td><td><span class="tag ${item.type === 'Расход' ? 'expense' : item.type === 'Инвестиция' ? 'investment' : item.type === 'Доход' ? 'income' : 'transfer'}">${esc(typeLabel(item.type))}</span></td><td>${item.type === 'Расход' && item.necessity ? `<span class="tag ${item.necessity === 'Гибкая' ? 'flex' : 'required'}">${esc(translate(item.necessity))}</span>` : '<span class="muted">—</span>'}</td>
     <td class="money ${item.type === 'Расход' ? 'expense' : item.type === 'Инвестиция' ? 'investment' : item.type === 'Доход' ? 'income' : ''}">${item.type === 'Расход' || item.type === 'Инвестиция' ? '−' : item.type === 'Доход' ? '+' : '↔ '}${money(item.rubAmount)}</td>
     ${actions ? `<td><div class="row-actions">${['investment', 'from-savings'].includes(item.savingsTransfer) ? `<button class="row-action" data-delete="${item.id}" title="${item.savingsTransfer === 'investment' ? 'Удалить инвестицию и отменить движение средств' : 'Удалить перевод и отменить движение средств'}">×</button>` : item.savingsTransfer ? '<small class="muted">Связанный перевод</small>' : `<button class="row-action" data-edit="${item.id}" title="Редактировать">✎</button><button class="row-action" data-delete="${item.id}" title="Удалить">×</button>`}</div></td>` : ''}</tr>`).join('')}</tbody></table></div>`;
 }
@@ -474,18 +476,27 @@ function renderOperations() {
   const sortValue = (item) => {
     if (state.operationSort === 'date') return item.date || '';
     if (state.operationSort === 'amount') return Number(item.rubAmount) || 0;
-    if (state.operationSort === 'category') return (item.category || (item.type === 'Перевод' ? item.savingsTransfer ? 'Между учётами' : 'Между счетами' : '')).toLocaleLowerCase('ru-RU');
+    if (state.operationSort === 'category') return (item.category || (item.type === 'Перевод' ? item.savingsTransfer ? 'Между учётами' : 'Между счетами' : '')).toLocaleLowerCase(localeCode());
     if (state.operationSort === 'account') {
       const from = item.savingsTransfer === 'from-savings' ? savingsAccountById(item.savingsAccountId)?.name : accountById(item.accountId)?.name;
       const to = ['to-savings', 'investment'].includes(item.savingsTransfer) ? savingsAccountById(item.savingsAccountId)?.name : accountById(item.destinationAccountId)?.name;
-      return `${from || ''} ${to ? `→ ${to}` : ''}`.toLocaleLowerCase('ru-RU');
+      return `${from || ''} ${to ? `→ ${to}` : ''}`.toLocaleLowerCase(localeCode());
     }
     return '';
   };
   const direction = state.operationSortDirection === 'asc' ? 1 : -1;
   filtered.sort((a, b) => {
+    if (state.operationSort === 'date') {
+      const dateComparison = (a.date || '').localeCompare(b.date || '');
+      if (dateComparison) return dateComparison * direction;
+      const aTime = a.recordedAt ? Date.parse(a.recordedAt) : NaN;
+      const bTime = b.recordedAt ? Date.parse(b.recordedAt) : NaN;
+      if (Number.isFinite(aTime) && Number.isFinite(bTime) && aTime !== bTime) return (aTime - bTime) * direction;
+      if (Number.isFinite(aTime) !== Number.isFinite(bTime)) return (Number.isFinite(aTime) ? -1 : 1) * direction;
+      return (a.id - b.id) * direction;
+    }
     const left = sortValue(a); const right = sortValue(b);
-    const comparison = typeof left === 'number' ? left - right : String(left).localeCompare(String(right), 'ru');
+    const comparison = typeof left === 'number' ? left - right : String(left).localeCompare(String(right), localeCode());
     return comparison ? comparison * direction : (a.id - b.id) * direction;
   });
   const categories = [...new Map([
@@ -504,7 +515,7 @@ function renderOperations() {
       <label class="filter-field"><span>Месяц</span><input id="operation-month" type="month" value="${state.operationMonth}"></label>
       <label class="filter-field"><span>С даты</span><input id="operation-date-from" type="date" value="${state.dateFrom}"></label>
       <label class="filter-field"><span>По дату</span><input id="operation-date-to" type="date" value="${state.dateTo}"></label>
-      <label class="filter-field"><span>Тип</span><select id="operation-type"><option value="Все">Все типы</option>${['Расход', 'Доход', 'Перевод', 'Инвестиция'].map((type) => `<option value="${type}" ${state.operationType === type ? 'selected' : ''}>${type}</option>`).join('')}</select></label>
+      <label class="filter-field"><span>Тип</span><select id="operation-type"><option value="Все">${translate('Все типы')}</option>${['Расход', 'Доход', 'Перевод', 'Инвестиция'].map((type) => `<option value="${type}" ${state.operationType === type ? 'selected' : ''}>${typeLabel(type)}</option>`).join('')}</select></label>
       <label class="filter-field"><span>Категория</span><select id="operation-category"><option value="">Все категории</option>${categories.map((item) => `<option value="${esc(item.name)}" ${state.operationCategory === item.name ? 'selected' : ''}>${esc(item.emoji ? `${item.emoji} ${item.name}` : item.name)}</option>`).join('')}</select></label>
       <label class="filter-field"><span>Счёт</span><select id="operation-account"><option value="">Все счета</option>${accounts().map((item) => `<option value="${item.id}" ${String(item.id) === state.operationAccount ? 'selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>
       <label class="filter-field"><span>Необходимость</span><select id="operation-necessity"><option value="">Любая</option>${state.data.lists.necessities.map((item) => `<option value="${esc(item)}" ${state.operationNecessity === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></label>
@@ -609,8 +620,8 @@ function renderSavings() {
   content.innerHTML = `${pageHeader('Накопления', 'Отдельные накопительные счета')}
     <div class="balance-hero savings-hero"><div class="balance-hero-main"><div><small>Общий баланс накоплений</small><strong data-rub-total>${totalRub === null ? '—' : money(totalRub)}</strong></div><div class="balance-hero-equivalents"><small>Эквивалент в USD</small><div class="currency-equivalent-list" data-total-currency-equivalents>${totalRub === null ? '<span class="currency-equivalent">— USD</span>' : cachedUsdEquivalent(totalRub)}</div></div></div><span class="balance-account-count">${savings.length} активных счетов</span></div>
     <div class="metrics savings-metrics"><article class="metric"><span>Отложенные</span><strong class="savings-metric-values">${esc(groupBalance('Отложенные'))}</strong><small>остатки по валютам</small></article><article class="metric"><span>Вклады</span><strong class="savings-metric-values">${esc(groupBalance('Вклад'))}</strong><small>остатки по валютам</small></article><article class="metric savings-rub-total"><span>Итого сегодня</span><strong data-rub-total>${totalRub === null ? '—' : money(totalRub)}</strong><small>рублёвый эквивалент</small></article></div>
-    <section class="card savings-accounts"><div class="section-title"><h3>Счета накоплений</h3><span>Начальный капитал + движения</span></div>${savings.length ? `<div class="savings-card-grid">${savings.map((item) => `<article class="savings-account-card" data-savings-account="${item.id}"><div class="savings-account-head"><div><span class="tag">${esc(item.type)}</span><h3>${esc(item.name)}</h3></div><button class="row-action danger" type="button" data-delete-savings="${item.id}" title="Удалить счёт">×</button></div><strong class="savings-balance">${money(item.calculatedBalance, item.currency)}</strong><small>Начальный капитал: ${money(item.initialCapital, item.currency)}</small><form class="savings-increase-form" data-savings-increase="${item.id}"><label class="field"><span>Изменить капитал · ${esc(item.currency)}</span><input name="amount" type="number" step="0.01" inputmode="decimal" required placeholder="Можно ввести отрицательную"></label><label class="field"><span>Дата</span><input name="date" type="date" value="${localIsoDate()}" required></label><div class="savings-increase-actions"><button class="primary-button" type="submit">Изменить капитал</button><button class="secondary-button" type="button" data-savings-history="${item.id}" aria-label="Открыть историю счёта ${esc(item.name)}">История</button></div></form></article>`).join('')}</div>` : '<div class="empty-state">Добавьте первый накопительный счёт.</div>'}</section>
-    <section class="card savings-create"><div class="section-title"><h3>Новый накопительный счёт</h3></div><form id="savings-create-form" class="savings-create-form"><label class="field"><span>Название</span><input name="name" maxlength="100" required placeholder="Например, Резервный вклад"></label><label class="field"><span>Тип</span><select name="type"><option>Отложенные</option><option>Вклад</option></select></label><label class="field"><span>Валюта</span><select name="currency">${currencies.map((value) => `<option>${esc(value)}</option>`).join('')}</select></label><label class="field"><span>Начальный капитал</span><input name="initialCapital" type="number" min="0" step="0.01" value="0" required></label><button class="primary-button" type="submit">Добавить счёт</button></form></section>
+    <section class="card savings-accounts"><div class="section-title"><h3>Счета накоплений</h3><span>Начальный капитал + движения</span></div>${savings.length ? `<div class="savings-card-grid">${savings.map((item) => `<article class="savings-account-card" data-savings-account="${item.id}"><div class="savings-account-head"><div><span class="tag">${esc(item.type)}</span><h3 class="account-name">${esc(item.name)}</h3></div><button class="row-action danger" type="button" data-delete-savings="${item.id}" title="Удалить счёт">×</button></div><strong class="savings-balance">${money(item.calculatedBalance, item.currency)}</strong><small>Начальный капитал: ${money(item.initialCapital, item.currency)}</small><form class="savings-increase-form" data-savings-increase="${item.id}"><label class="field"><span>Изменить капитал · ${esc(item.currency)}</span><input name="amount" type="number" step="0.01" inputmode="decimal" required placeholder="Можно ввести отрицательную"></label><label class="field"><span>Дата</span><input name="date" type="date" value="${localIsoDate()}" required></label><div class="savings-increase-actions"><button class="primary-button" type="submit">Изменить капитал</button><button class="secondary-button" type="button" data-savings-history="${item.id}" aria-label="Открыть историю счёта ${esc(item.name)}">История</button></div></form></article>`).join('')}</div>` : '<div class="empty-state">Добавьте первый накопительный счёт.</div>'}</section>
+    <section class="card savings-create"><div class="section-title"><h3>Новый накопительный счёт</h3></div><form id="savings-create-form" class="savings-create-form"><label class="field"><span>Название</span><input name="name" maxlength="100" required placeholder="Например, Резервный вклад"></label><label class="field"><span>Тип</span><select name="type"><option value="Отложенные">${translate('Отложенные')}</option><option value="Вклад">${translate('Вклад')}</option></select></label><label class="field"><span>Валюта</span><select name="currency">${currencies.map((value) => `<option>${esc(value)}</option>`).join('')}</select></label><label class="field"><span>Начальный капитал</span><input name="initialCapital" type="number" min="0" step="0.01" value="0" required></label><button class="primary-button" type="submit">Добавить счёт</button></form></section>
     <section class="card savings-transfer"><div class="section-title"><h3>Вывод на обычный счёт</h3><span>Пополнение накоплений оформляется как инвестиция</span></div>${mainAccounts.length && savings.length ? `<form id="savings-transfer-form" class="savings-transfer-form"><input type="hidden" name="direction" value="from-savings"><label class="field savings-transfer-savings-account"><span>Счёт накоплений</span><select name="savingAccountId">${savings.map((item) => `<option value="${item.id}">${esc(item.name)} · ${esc(item.currency)}</option>`).join('')}</select></label><label class="field savings-transfer-saving-amount"><span>Сумма списания · ${esc(savings[0].currency)}</span><input name="savingAmount" type="number" min="0.000001" step="any" required></label><label class="field savings-transfer-main-account"><span>Обычный счёт для зачисления</span><select name="mainAccountId">${mainAccounts.map((item) => `<option value="${item.id}">${esc(item.name)} · ${esc(item.currency)}</option>`).join('')}</select></label><label class="field savings-transfer-main-amount"><span>Сумма зачисления · ${esc(mainAccounts[0].currency)}</span><input name="mainAmount" type="number" min="0.000001" step="any" required></label><label class="field savings-transfer-date"><span>Дата</span><input name="date" type="date" value="${localIsoDate()}" required></label><button class="primary-button savings-transfer-submit" type="submit">Вывести</button></form>` : '<p class="reference-note">Для вывода добавьте хотя бы один счёт в каждом учёте.</p>'}</section>
     <section class="card currency-comparison savings-comparison"><h2>Изменение стоимости текущего остатка</h2></section>`;
   const comparison = content.querySelector('.savings-comparison');
@@ -737,7 +748,7 @@ function referenceStringRow(name, item, index, total, placeholder = '') {
 }
 
 function referenceCategoryRow(item, index, total) {
-  return `<div class="reference-row category-reference-row"><input class="category-emoji-input" value="${esc(item.emoji || '')}" maxlength="16" aria-label="Эмодзи категории" placeholder="📌"><input class="category-name-input" value="${esc(item.name || '')}" required aria-label="Название категории" placeholder="Название категории"><select aria-label="Тип категории"><option ${item.type !== 'Доход' ? 'selected' : ''}>Расход</option><option ${item.type === 'Доход' ? 'selected' : ''}>Доход</option></select><div class="reference-row-actions">${referenceMoveButtons('categories', index, total)}<button type="button" class="reference-remove" data-remove-reference title="Удалить" aria-label="Удалить строку справочника">×</button></div></div>`;
+  return `<div class="reference-row category-reference-row"><input class="category-emoji-input" value="${esc(item.emoji || '')}" maxlength="16" aria-label="Эмодзи категории" placeholder="📌"><input class="category-name-input" value="${esc(item.name || '')}" required aria-label="Название категории" placeholder="Название категории"><select aria-label="Тип категории"><option value="Расход" ${item.type !== 'Доход' ? 'selected' : ''}>${typeLabel('Расход')}</option><option value="Доход" ${item.type === 'Доход' ? 'selected' : ''}>${typeLabel('Доход')}</option></select><div class="reference-row-actions">${referenceMoveButtons('categories', index, total)}<button type="button" class="reference-remove" data-remove-reference title="Удалить" aria-label="Удалить строку справочника">×</button></div></div>`;
 }
 
 function refreshReferenceMoveButtons(rows) {
@@ -759,7 +770,7 @@ function renderLists() {
           <button type="button" class="reference-add" data-add-reference="categories">+ Добавить категорию</button></article>
         <article class="card reference-card"><div class="card-head"><div><h2>Валюты</h2><p>Трёхбуквенные коды ЦБ РФ; RUB обязательна</p></div><span>${currencies.length}</span></div>${stringRows('currencies', currencies)}<button type="button" class="reference-add" data-add-reference="currencies">+ Добавить валюту</button></article>
         <article class="card reference-card"><div class="card-head"><div><h2>Необходимость</h2><p>Метки расходов</p></div><span>${necessities.length}</span></div>${stringRows('necessities', necessities)}<button type="button" class="reference-add" data-add-reference="necessities">+ Добавить значение</button></article>
-        <article class="card reference-card system-reference"><div class="card-head"><div><h2>Типы операций</h2><p>Системные значения</p></div></div><div class="list-columns">${operationTypes.map((item) => `<div class="list-chip"><span>${esc(item)}</span><small>Защищено</small></div>`).join('')}</div><p class="reference-note">«Доход», «Расход», «Перевод» и «Инвестиция» встроены в расчёты приложения и не редактируются. Инвестиция доступна только в desktop-приложении.</p></article>
+        <article class="card reference-card system-reference"><div class="card-head"><div><h2>Типы операций</h2><p>Системные значения</p></div></div><div class="list-columns">${operationTypes.map((item) => `<div class="list-chip"><span>${esc(typeLabel(item))}</span><small>Защищено</small></div>`).join('')}</div><p class="reference-note">«Доход», «Расход», «Перевод» и «Инвестиция» встроены в расчёты приложения и не редактируются. Инвестиция доступна только в desktop-приложении.</p></article>
         <article class="card reference-card system-reference"><div class="card-head"><div><h2>Категории инвестиций</h2><p>Определяются типом накопительного счёта</p></div></div><div class="list-columns">${investmentCategories.map((item) => `<div class="list-chip"><span>${esc(item)}</span><small>Защищено</small></div>`).join('')}</div><p class="reference-note">Названия фиксированы и не редактируются. Категория выбирается автоматически по типу накопительного счёта.</p></article>
       </div>
       <div class="reference-actions"><p>Старые операции сохранят прежние значения. Перед записью будет создан бэкап, затем справочники отправятся в Syncthing.</p><button class="primary-button" type="submit">Сохранить справочники</button></div>
@@ -809,8 +820,8 @@ function renderPhoneSetup() {
     statusClass = 'setup-status-attention';
     nextStep = 'Посмотрите подробности последней проверки и устраните причину; затем подготовьте данные повторно.';
   }
-  const lastCheck = sync.lastScanAt ? new Date(sync.lastScanAt).toLocaleString('ru-RU') : 'Пока не выполнялась';
-  const updatedAt = mobile.modifiedAt ? new Date(mobile.modifiedAt).toLocaleString('ru-RU') : 'Файл пока не найден';
+  const lastCheck = sync.lastScanAt ? new Date(sync.lastScanAt).toLocaleString(localeCode()) : 'Пока не выполнялась';
+  const updatedAt = mobile.modifiedAt ? new Date(mobile.modifiedAt).toLocaleString(localeCode()) : 'Файл пока не найден';
   content.innerHTML = `${pageHeader('Подключить телефон', 'Необязательная настройка · desktop работает и без телефона')}
     <section class="phone-ready-banner"><div><span class="phone-ready-kicker">DESKTOP ГОТОВ</span><h2>Продолжайте вести журнал на компьютере</h2><p>Подключение телефона можно завершить позже. Принятые с телефона операции импортируются в книгу только на этом компьютере.</p></div><div class="phone-banner-actions"><button class="secondary-button" type="button" data-phone-instructions>Открыть инструкцию</button><button class="secondary-button" type="button" data-phone-later>Продолжить позже</button></div></section>
     <div class="phone-setup-grid">
@@ -839,7 +850,7 @@ function renderSettings() {
   const settings = state.settings;
   const sync = settings.sync || {};
   const updates = settings.updates || {};
-  const settingRow = (label, value) => `<div class="setting-row"><span>${esc(label)}</span><strong title="${esc(value || '—')}">${esc(value || '—')}</strong></div>`;
+  const settingRow = (label, value) => `<div class="setting-row"><span>${esc(label)}</span><strong class="setting-value" title="${esc(value || '—')}">${esc(value || '—')}</strong></div>`;
   const updateInfo = state.updateCheck;
   const availableUpdate = updateInfo?.enabled && updateInfo.update
     ? `<p class="update-message">Доступна версия <strong>${esc(updateInfo.update.version)}</strong> (${updateInfo.update.channel === 'beta' ? 'beta' : 'стабильная'}).</p>${updateInfo.update.notes ? `<pre class="update-notes">${esc(updateInfo.update.notes)}</pre>` : ''}<div class="settings-actions settings-actions-wrap"><a class="secondary-button update-release-link" href="${esc(updateInfo.update.url)}" target="_blank" rel="noopener">Описание выпуска</a><button class="primary-button" type="button" data-install-update="${esc(updateInfo.update.version)}">Скачать и установить</button></div>`
@@ -869,9 +880,10 @@ function renderSettings() {
     : 'Архив не выбран';
   const recoveryButtonsDisabled = !state.recoveryFile || state.recoveryFile.size > 256 * 1024 * 1024 || state.recoveryBusy;
   const recoveryReport = state.recoveryResult
-    ? `<p class="recovery-report">SHA-256: <code>${esc(state.recoveryResult.manifest.sha256)}</code><br>Создан: ${esc(new Date(state.recoveryResult.manifest.createdAt).toLocaleString('ru-RU'))} · Книга: ${number(state.recoveryResult.workbookBytes / 1024 / 1024, 1)} МБ</p>`
+    ? `<p class="recovery-report">SHA-256: <code>${esc(state.recoveryResult.manifest.sha256)}</code><br>Создан: ${esc(new Date(state.recoveryResult.manifest.createdAt).toLocaleString(localeCode()))} · Книга: ${number(state.recoveryResult.workbookBytes / 1024 / 1024, 1)} MB</p>`
     : '';
   content.innerHTML = `${pageHeader('Настройки', 'Системные параметры приложения')}
+    <label class="field locale-setting"><span>Язык интерфейса</span><select id="locale-select"><option value="ru">Русский</option><option value="en">English</option></select></label>
     <article class="card settings-card settings-recovery-card"><div class="card-head"><div><h2>Копия на другом носителе</h2><p>Создайте ZIP всей книги и проверьте его перед хранением.</p></div></div>
       <p class="recovery-help">Архив содержит полную финансовую книгу и постоянный реестр синхронизации. ZIP не зашифрован: храните его на защищённом носителе с ограниченным доступом. Выберите другой физический диск. Finance не отправляет архив в интернет.</p>
       <button class="primary-button" type="button" data-recovery-export ${state.recoveryBusy ? 'disabled' : ''}>${state.recoveryBusy ? 'Подождите…' : 'Создать recovery-архив'}</button>
@@ -882,11 +894,11 @@ function renderSettings() {
     </article>
     <div class="settings-grid">
       <article class="card settings-card"><div class="card-head"><div><h2>Excel и резервные копии</h2><p>Текущие локальные пути и состояние хранения</p></div></div>
-        ${settingRow('Папка данных Finance', settings.dataDirectory)}${settingRow('Рабочая книга', settings.workbookPath)}${settingRow('Последнее изменение', new Date(settings.workbookModifiedAt).toLocaleString('ru-RU'))}${settingRow('Папка бэкапов', settings.backupDirectory)}${settingRow('Бэкапы', `${settings.backupCount} из ${settings.backupLimit}`)}${settingRow('Последний бэкап', settings.latestBackup)}
+        ${settingRow('Папка данных Finance', settings.dataDirectory)}${settingRow('Рабочая книга', settings.workbookPath)}${settingRow('Последнее изменение', new Date(settings.workbookModifiedAt).toLocaleString(localeCode()))}${settingRow('Папка бэкапов', settings.backupDirectory)}${settingRow('Бэкапы', `${settings.backupCount} из ${settings.backupLimit}`)}${settingRow('Последний бэкап', settings.latestBackup)}
         <div class="settings-actions settings-actions-wrap"><button class="secondary-button" type="button" data-open-folder="data">Открыть папку данных</button><button class="secondary-button" type="button" data-open-folder="workbook">Открыть папку книги</button><button class="secondary-button" type="button" data-open-folder="backups">Открыть бэкапы</button><button class="danger-button" type="button" data-open-restore>Восстановить из бэкапа</button></div>
       </article>
       <article class="card settings-card settings-sync-card"><div class="card-head"><div><h2>Мобильная синхронизация</h2><p>Обработка на компьютере. Доставку на телефон выполняет Syncthing.</p></div><span class="tag sync-status ${sync.lastError ? 'required' : ''}">${sync.running ? 'Синхронизация…' : sync.lastError ? 'Требует внимания' : sync.lastScanAt ? 'Обработано на компьютере' : 'Ожидает обработки'}</span></div>
-        ${settingRow('Папка Syncthing', settings.syncDirectory)}${settingRow('Последняя проверка', sync.lastScanAt ? new Date(sync.lastScanAt).toLocaleString('ru-RU') : 'Ещё не выполнялась')}${settingRow('Импортировано', sync.imported)}${settingRow('Дубликаты', sync.duplicates)}${settingRow('Ошибки', sync.errors)}${settingRow('Хранение квитанций', `${settings.receiptRetentionDays} дней`)}
+        ${settingRow('Папка Syncthing', settings.syncDirectory)}${settingRow('Последняя проверка', sync.lastScanAt ? new Date(sync.lastScanAt).toLocaleString(localeCode()) : 'Ещё не выполнялась')}${settingRow('Импортировано', sync.imported)}${settingRow('Дубликаты', sync.duplicates)}${settingRow('Ошибки', sync.errors)}${settingRow('Хранение квитанций', `${settings.receiptRetentionDays} дней`)}
         ${settingRow('Ожидают удаления', sync.cleanupPending ?? 0)}${sync.lastError ? settingRow('Последняя ошибка', sync.lastError) : ''}
         <div class="settings-actions settings-actions-wrap"><button class="secondary-button" type="button" data-open-folder="sync">Открыть папку Syncthing</button><button class="secondary-button" type="button" data-export-mobile>Обновить данные Obsidian</button></div>
       </article>
@@ -898,6 +910,7 @@ function renderSettings() {
       </article>
       <article class="card settings-card reset-settings"><h2>Очистка данных</h2>${state.data.syncBlocked ? '<p class="reference-note">Импорт и выдача новых ID заблокированы: после восстановления требуется достоверный реестр синхронизации. Входящие файлы сохраняются.</p>' : ''}<p>Перед очисткой создаётся бэкап Excel. Мобильная очередь и связанные карточки также удаляются. Бэкапы и справочники сохраняются.</p><div class="settings-actions settings-actions-wrap"><button type="button" class="danger-button" data-clear-data="history">Удалить историю</button><button type="button" class="danger-button" data-clear-data="all">Полная очистка</button></div></article>
     </div>`;
+  content.querySelector('#locale-select').value = currentLocale();
 }
 
 function render() {
@@ -1108,7 +1121,7 @@ document.addEventListener('click', async (event) => {
   const recoveryRehearseButton = event.target.closest('[data-recovery-rehearse]');
   if (recoveryRehearseButton) {
     if (!state.recoveryFile || state.recoveryBusy) return;
-    if (!confirm('Finance временно восстановит книгу из выбранного ZIP в новую отдельную папку, проверит её и удалит тестовую папку. Рабочая книга не изменится. Продолжить?')) return;
+    if (!ask('Finance временно восстановит книгу из выбранного ZIP в новую отдельную папку, проверит её и удалит тестовую папку. Рабочая книга не изменится. Продолжить?')) return;
     state.recoveryBusy = true;
     state.recoveryStatus = 'Проверяем архив и пробуем восстановить книгу в отдельную временную папку…';
     state.recoveryResult = null;
@@ -1154,7 +1167,7 @@ document.addEventListener('click', async (event) => {
   }
   const deleteSavings = event.target.closest('[data-delete-savings]');
   if (deleteSavings) {
-    if (!confirm('Удалить этот накопительный счёт? Счёт с историей движения капитала удалить нельзя.')) return;
+    if (!ask('Удалить этот накопительный счёт? Счёт с историей движения капитала удалить нельзя.')) return;
     deleteSavings.disabled = true;
     try { await request(`/api/savings/accounts/${deleteSavings.dataset.deleteSavings}`, { method: 'DELETE' }); state.data = await request('/api/data'); render(); notify('Накопительный счёт удалён.'); }
     catch (error) { notify(error.message, 'error'); deleteSavings.disabled = false; }
@@ -1165,8 +1178,9 @@ document.addEventListener('click', async (event) => {
   if (clearButton) {
     const mode = clearButton.dataset.clearData;
     const phrase = mode === 'all' ? 'ПОЛНАЯ ОЧИСТКА' : 'УДАЛИТЬ ИСТОРИЮ';
+    const visiblePhrase = translate(phrase);
     const explanation = mode === 'all' ? 'Будут удалены операции, оба вида счетов, начальные остатки и капитал накоплений. Справочники сохранятся.' : 'Будут удалены операции и движения накоплений. Оба вида счетов, начальные остатки и начальный капитал сохранятся.';
-    if (prompt(`${explanation}\nМобильная очередь и карточки также будут удалены.\nДля подтверждения введите: ${phrase}`) !== phrase) return;
+    if (askText(`${explanation}\nМобильная очередь и карточки также будут удалены.\nДля подтверждения введите: ${visiblePhrase}`) !== visiblePhrase) return;
     clearButton.disabled = true;
     try {
       const result = await request('/api/settings/clear-data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode, confirmation: phrase }) });
@@ -1184,7 +1198,7 @@ document.addEventListener('click', async (event) => {
   const installUpdateButton = event.target.closest('[data-install-update]');
   if (installUpdateButton) {
     const version = installUpdateButton.dataset.installUpdate;
-    if (!confirm(`Установить Finance ${version}? Приложение закроется на время установки и запустится снова после неё. Книга, настройки и очередь синхронизации хранятся отдельно от версии приложения.`)) return;
+    if (!ask(`Установить Finance ${version}? Приложение закроется на время установки и запустится снова после неё. Книга, настройки и очередь синхронизации хранятся отдельно от версии приложения.`)) return;
     installUpdateButton.disabled = true;
     installUpdateButton.textContent = 'Загружаю и проверяю…';
     try {
@@ -1203,7 +1217,7 @@ document.addEventListener('click', async (event) => {
   if (rollbackButton) {
     const version = rollbackButton.dataset.rollbackVersion;
     const label = version === 'legacy' ? 'предыдущую установленную версию' : `версию ${version}`;
-    if (!confirm(`Вернуть ${label}? Finance штатно завершит текущие операции, переключится на сохранённую версию и перезапустится. Книга и настройки останутся прежними.`)) return;
+    if (!ask(`Вернуть ${label}? Finance штатно завершит текущие операции, переключится на сохранённую версию и перезапустится. Книга и настройки останутся прежними.`)) return;
     rollbackButton.disabled = true;
     try {
       await request('/api/updates/rollback', { method: 'POST' });
@@ -1287,7 +1301,7 @@ document.addEventListener('click', async (event) => {
   }
   if (event.target.closest('[data-open-restore]')) {
     const select = restoreForm.elements.backup;
-    select.innerHTML = (state.settings.backups || []).map((backup) => `<option value="${esc(backup.name)}">${esc(new Date(backup.modifiedAt).toLocaleString('ru-RU'))} · ${number(backup.size / 1024, 0)} КБ · ${esc(backup.name)}</option>`).join('');
+    select.innerHTML = (state.settings.backups || []).map((backup) => `<option value="${esc(backup.name)}">${esc(new Date(backup.modifiedAt).toLocaleString(localeCode()))} · ${number(backup.size / 1024, 0)} ${translate('КБ')} · ${esc(backup.name)}</option>`).join('');
     restoreForm.querySelector('#restore-backup-details').textContent = select.options.length ? 'Перед восстановлением будет создана страховочная копия текущей книги.' : 'Доступных резервных копий нет.';
     restoreForm.querySelector('button[type="submit"]').disabled = !select.options.length;
     restoreDialog.showModal();
@@ -1343,7 +1357,7 @@ document.addEventListener('click', async (event) => {
   const deleteAccount = event.target.closest('[data-delete-account]');
   if (deleteAccount) {
     const account = accountById(deleteAccount.dataset.deleteAccount);
-    if (!confirm(`Удалить счёт «${account?.name || 'Без названия'}»? Счёт с операциями удалить нельзя.`)) return;
+    if (!ask(`Удалить счёт «${account?.name || 'Без названия'}»? Счёт с операциями удалить нельзя.`)) return;
     deleteAccount.disabled = true;
     try {
       const result = await request(`/api/accounts/${deleteAccount.dataset.deleteAccount}`, { method: 'DELETE' });
@@ -1360,7 +1374,7 @@ document.addEventListener('click', async (event) => {
     : removingOperation?.savingsTransfer === 'investment'
       ? 'Удалить инвестицию? Расход обычного счёта и движение накоплений будут отменены. Перед удалением будет создан бэкап.'
       : 'Удалить эту операцию из Excel? Перед удалением будет создан бэкап.';
-  if (remove && confirm(confirmation)) {
+  if (remove && ask(confirmation)) {
     try {
       const result = await request(`/api/operations/${remove.dataset.delete}`, { method: 'DELETE' });
       state.data = result.data; render(); notify(`${removingOperation?.savingsTransfer === 'from-savings' ? 'Перевод удалён, движение средств отменено' : removingOperation?.savingsTransfer === 'investment' ? 'Инвестиция удалена, движение средств отменено' : 'Операция удалена'}. Бэкап: ${result.backup}`);
@@ -1369,6 +1383,10 @@ document.addEventListener('click', async (event) => {
 });
 
 document.addEventListener('change', (event) => {
+  if (event.target.id === 'locale-select') {
+    void setLocale(event.target.value).then(() => { render(); renderUpdateIndicator(); });
+    return;
+  }
   const recoveryInput = event.target.closest('[data-recovery-file]');
   if (recoveryInput) {
     state.recoveryFile = recoveryInput.files?.[0] || null;
@@ -1410,7 +1428,7 @@ content.addEventListener('change', async (event) => {
         await request(`/api/rates?currency=${encodeURIComponent(currency)}&date=${encodeURIComponent(localIsoDate())}`);
       } catch (error) {
         input.setCustomValidity(error.message);
-        alert(error.message);
+        tell(error.message);
         input.focus();
       }
     }
@@ -1517,7 +1535,7 @@ content.addEventListener('submit', async (event) => {
       const syncNote = result.mobileLists?.warning ? ` Синхронизация повторится автоматически: ${result.mobileLists.warning}` : ' Мобильные справочники обновлены.';
       notify(`Справочники сохранены. Бэкап: ${result.backup}.${syncNote}`);
     } catch (error) {
-      if (error.message.includes('справочнике ЦБ РФ')) alert(error.message);
+      if (error.message.includes('справочнике ЦБ РФ')) tell(error.message);
       notify(error.message, 'error'); button.disabled = false; button.textContent = 'Сохранить справочники';
     }
     return;
@@ -1565,7 +1583,7 @@ content.addEventListener('change', (event) => {
 restoreForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const backup = restoreForm.elements.backup.value;
-  if (!backup || !confirm(`Восстановить Excel из «${backup}»? Текущее состояние будет предварительно сохранено отдельным бэкапом. Необработанные мобильные события, созданные до восстановления, будут отброшены.`)) return;
+  if (!backup || !ask(`Восстановить Excel из «${backup}»? Текущее состояние будет предварительно сохранено отдельным бэкапом. Необработанные мобильные события, созданные до восстановления, будут отброшены.`)) return;
   const button = restoreForm.querySelector('button[type="submit"]');
   button.disabled = true; button.textContent = 'Восстанавливаем…';
   try {

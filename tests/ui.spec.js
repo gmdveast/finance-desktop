@@ -123,6 +123,18 @@ scenario('сбой фоновой проверки не показывает н�
   await expect(page.locator('#toast-stack .toast')).toHaveCount(0);
 });
 
+scenario('откат версии остаётся доступен в настройках, когда установлена предыдущая версия', async ({ page }) => {
+  await page.route('**/api/settings', async (route) => {
+    const response = await route.fetch();
+    const settings = await response.json();
+    settings.updates = { ...settings.updates, version: '1.2.0', rollbackVersion: '1.1.0' };
+    await route.fulfill({ response, json: settings });
+  });
+
+  await page.goto('/#settings');
+  await expect(page.locator('.settings-update-card [data-rollback-version="1.1.0"]')).toHaveText('Вернуть версию 1.1.0');
+});
+
 scenario('порядок категорий, валют и необходимости сохраняется и применяется в формах', async ({ page, request }) => {
   const initial = await (await request.get('/api/data')).json();
   await page.goto('/#lists');
@@ -1193,6 +1205,155 @@ scenario('lifecycle: delayed background response preserves a draft started durin
   release(); await response;
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await expect(input).toHaveValue('Несохранённый черновик');
+});
+
+scenario('locales: desktop and first-run screens switch RU/EN and retain the selected language', async ({ page }) => {
+  await page.goto('/#settings');
+  await page.evaluate(() => localStorage.setItem('finance:locale', 'en'));
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(page.locator('#content h1')).toHaveText('Settings');
+  await expect(page.locator('#locale-select')).toHaveValue('en');
+
+  await page.locator('#locale-select').selectOption('ru');
+  await expect(page.locator('html')).toHaveAttribute('lang', 'ru');
+  await expect(page.locator('#content h1')).toHaveText('Настройки');
+  await page.reload();
+  await expect(page.locator('#content h1')).toHaveText('Настройки');
+  await expect(page.locator('#locale-select')).toHaveValue('ru');
+
+  await page.locator('#locale-select').selectOption('en');
+  await expect(page.locator('#content h1')).toHaveText('Settings');
+  for (const [view, heading] of [
+    ['overview', /Overview for/],
+    ['operations', 'Operations'],
+    ['balance', 'Accounts and balances'],
+    ['savings', 'Savings'],
+    ['lists', 'Reference lists'],
+    ['phone', 'Connect phone'],
+    ['settings', 'Settings'],
+  ]) {
+    await page.goto(`/#${view}`);
+    await expect(page.locator('#content h1')).toHaveText(heading);
+  }
+  await page.route('**/api/settings/export-mobile', (route) => route.fulfill({
+    status: 503,
+    contentType: 'application/json',
+    body: JSON.stringify({ error: 'Русский текст должен игнорироваться', code: 'STORAGE_UNAVAILABLE', retryable: true }),
+  }));
+  await page.goto('/#settings');
+  await page.getByRole('button', { name: 'Update Obsidian data' }).click();
+  await expect(page.locator('#toast-stack')).toContainText('Finance could not save the workbook.');
+  await expect(page.locator('#toast-stack')).toContainText('You can try again after fixing the issue.');
+  await page.goto('/#operations');
+  await expect(page.locator('#operation-search')).toHaveAttribute('placeholder', 'Note, category, or account');
+  const typeOptions = await page.locator('#operation-type option').evaluateAll((options) => options.map((option) => ({ value: option.value, label: option.textContent.trim() })));
+  expect(typeOptions).toEqual([
+    { value: 'Все', label: 'All types' },
+    { value: 'Расход', label: 'Expense' },
+    { value: 'Доход', label: 'Income' },
+    { value: 'Перевод', label: 'Transfer' },
+    { value: 'Инвестиция', label: 'Investment' },
+  ]);
+  await page.getByRole('button', { name: 'New operation' }).click();
+  await expect(page.locator('#operation-dialog')).toBeVisible();
+  await expect(page.locator('#operation-dialog [role="radiogroup"]')).toContainText('Expense');
+  await page.evaluate(() => localStorage.removeItem('finance:locale'));
+  await page.addInitScript(() => Object.defineProperty(navigator, 'language', { get: () => 'en-US' }));
+  await page.goto('/setup.html');
+  await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText("Let's set up your finance journal");
+  await expect(page.getByRole('button', { name: 'Create a new workbook' })).toBeVisible();
+});
+
+scenario('recordedAt: operation list shows the server recording time for new rows', async ({ page, request }) => {
+  const data = await (await request.get('/api/data')).json();
+  const created = await request.post('/api/operations', { data: {
+    date: data.asOfDate,
+    type: 'Расход',
+    category: 'Продукты',
+    amount: 3,
+    currency: data.accounts[0].currency,
+    rate: data.accounts[0].rate,
+    accountId: data.accounts[0].id,
+    notes: 'recordedAt-ui-check',
+  } });
+  expect(created.status()).toBe(201);
+  const operationId = (await created.json()).result.id;
+  await page.goto('/#operations');
+  await expect(page.locator('#workbook-name')).toHaveAttribute('data-revision', /[a-f0-9]{64}/);
+  const row = page.locator(`[data-operation-row="${operationId}"]`);
+  await expect(row.locator('time.operation-time')).toHaveAttribute('datetime', /2026-10-16T/);
+  await expect(row.locator('time.operation-time')).toHaveText(/\d{2}:\d{2}/);
+});
+
+scenario('lifecycle: browser registers its tab and releases it on pagehide', async ({ page }) => {
+  const events = [];
+  await page.route('**/api/system/presence', async (route) => {
+    events.push(route.request().postDataJSON());
+    await route.fulfill({ status: 204 });
+  });
+  await page.goto('/#home');
+  await expect.poll(() => events.filter(({ active }) => active === true).length).toBeGreaterThan(0);
+  const [registration] = events.filter(({ active }) => active === true);
+  expect(registration.clientId).toMatch(/^[0-9a-f-]{36}$/i);
+
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')));
+  await expect.poll(() => events.filter(({ active }) => active === false).length).toBe(1);
+  expect(events.find(({ active }) => active === false).clientId).toBe(registration.clientId);
+});
+
+scenario('lifecycle: closing one real browser tab keeps Finance alive until the last tab closes', async ({ page, baseURL }) => {
+  test.setTimeout(45_000);
+  const origin = new URL(baseURL).origin;
+  const health = async () => fetch(`${origin}/api/settings`, { signal: AbortSignal.timeout(500) })
+    .then((response) => response.status)
+    .catch(() => 0);
+  const waitForRegistration = (tab) => tab.waitForRequest((request) => {
+    if (!request.url().endsWith('/api/system/presence')) return false;
+    try { return request.postDataJSON().active === true; }
+    catch { return false; }
+  });
+
+  const firstRegistered = waitForRegistration(page);
+  await page.goto(`${origin}/#home`);
+  await firstRegistered;
+  await expect.poll(health).toBe(200);
+
+  const second = await page.context().newPage();
+  const secondRegistered = waitForRegistration(second);
+  await second.goto(`${origin}/#home`);
+  await secondRegistered;
+
+  await page.close();
+  await expect.poll(health).toBe(200);
+
+  await second.close();
+  await expect.poll(health, { timeout: 25_000 }).toBe(0);
+});
+
+scenario('lifecycle: closing the whole browser stops Finance by pagehide or the presence lease', async ({ page, browser, financeServer }) => {
+  test.setTimeout(180_000);
+  const { baseURL, presenceEvents } = financeServer;
+  const origin = new URL(baseURL).origin;
+  const health = async () => fetch(`${origin}/api/settings`, { signal: AbortSignal.timeout(500) })
+    .then((response) => response.status)
+    .catch(() => 0);
+  await page.goto(`${origin}/#home`);
+  await expect.poll(() => presenceEvents.some(({ body }) => body?.active === true)).toBe(true);
+  const closedAt = performance.now();
+
+  await browser.close();
+  await expect.poll(health, { timeout: 165_000, intervals: [500, 1000, 2000] }).toBe(0);
+
+  const elapsedMs = performance.now() - closedAt;
+  const release = presenceEvents.find(({ body }) => body?.active === false);
+  if (release) {
+    expect(release.statusCode).toBe(204);
+    expect(elapsedMs).toBeLessThan(40_000);
+  } else {
+    expect(elapsedMs).toBeGreaterThanOrEqual(100_000);
+  }
 });
 
 if (process.env.FINANCE_TEST_REVERSE === '1') scenarios.reverse();
