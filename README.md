@@ -1,41 +1,41 @@
 # Finance
 
-Finance — локальное приложение для учёта личных финансов в книге Excel. Оно работает на Windows и может принимать операции с телефона через Obsidian и Syncthing.
+Finance is a local Windows app for managing personal finances in an Excel workbook. It can receive transactions from your phone through Obsidian and Syncthing.
 
-Текущая версия проекта: **1.2.2**. Desktop-интерфейс и первый запуск поддерживают русский и английский языки; язык можно выбрать в настройках. В версии 1.2.2 время операции отображается перед датой, индикатор обновления совмещён с индикатором выбранной вкладки, а дата в обзоре помещается в столбец.
+Current version: **1.2.2**. The desktop app and first-run setup are available in English and Russian; choose a language in Settings. In 1.2.2, transaction time appears above the date, the update notice aligns with the selected navigation tab, and dates fit in the Overview table.
 
-## Установка
+## Installation
 
-1. Скачайте последний стабильный установщик `Finance-Setup-...-x64.exe` со [страницы релизов](https://github.com/gmdveast/finance-desktop/releases).
-2. Запустите установщик. Node.js и другие зависимости устанавливать не нужно.
-3. Откройте Finance из меню «Пуск».
-4. При первом запуске создайте новую книгу или импортируйте существующую книгу Finance `.xlsx`. Исходный файл при импорте не изменяется.
+1. Download the latest stable `Finance-Setup-...-x64.exe` installer from the [releases page](https://github.com/gmdveast/finance-desktop/releases).
+2. Run the installer. You do not need to install Node.js or other dependencies.
+3. Open Finance from the Windows Start menu.
+4. On first launch, create a new workbook or import an existing Finance `.xlsx` workbook. The original file is not modified during import.
 
-Для импорта нужны листы «Операции», «Списки», «Баланс» и «Сводка»; размер книги — не более 50 МБ.
+To import a workbook, it must contain the sheets `Операции` (Transactions), `Списки` (Lists), `Баланс` (Balance), and `Сводка` (Summary). The workbook must be no larger than 50 MB.
 
-Установщик пока не подписан сертификатом, поэтому Windows может показать предупреждение SmartScreen. Сверьте SHA-256 установщика с файлом `.sha256`, опубликованным рядом с ним. В PowerShell хеш можно получить командой `Get-FileHash "путь\к\Finance-Setup.exe" -Algorithm SHA256`. Запускайте файл только при совпадении хеша.
+The installer is not signed yet, so Windows may show a SmartScreen warning. Compare the installer's SHA-256 hash with the `.sha256` file published beside it. In PowerShell, get the hash with `Get-FileHash "path\to\Finance-Setup.exe" -Algorithm SHA256`. Run the installer only if the hashes match.
 
-## Данные и резервные копии
+## Data and backups
 
-- Приложение: `%LOCALAPPDATA%\Programs\Finance`
-- Книга, настройки и другие данные: `%LOCALAPPDATA%\Finance\data`
-- Книга по умолчанию: `%LOCALAPPDATA%\Finance\data\uchet_povsednevnyh_finansov.xlsx`
-- Папка обмена с телефоном: `%LOCALAPPDATA%\Finance\Finance Sync`
+- Application: `%LOCALAPPDATA%\Programs\Finance`
+- Workbook, settings, and other data: `%LOCALAPPDATA%\Finance\data`
+- Default workbook: `%LOCALAPPDATA%\Finance\data\uchet_povsednevnyh_finansov.xlsx`
+- Phone sync folder: `%LOCALAPPDATA%\Finance\Finance Sync`
 
-Удаление приложения не удаляет книгу и пользовательские данные. Finance сохраняет последние 30 локальных копий книги; их можно просмотреть и восстановить в настройках. Локальные копии находятся на том же диске и не защищают от его поломки.
+Uninstalling Finance does not remove your workbook or user data. Finance keeps the 30 most recent local workbook backups; you can review and restore them in Settings. These backups are stored on the same drive and will not protect your data if that drive fails.
 
-Для копии на другом носителе откройте в Finance **«Настройки» → «Копия на другом носителе»**. Recovery ZIP содержит всю книгу и не зашифрован: сохраните его на отдельном физическом диске и проверьте восстановление.
+To save a copy to another storage device, open Finance and choose **Settings → Copy on another drive**. The recovery ZIP contains the entire workbook and is not encrypted. Store it on a separate physical drive and verify that it can be restored.
 
-Finance — единственное приложение, которое должно записывать изменения в рабочую книгу. Не редактируйте её в Excel, пока Finance запущен, и не размещайте её на сетевом диске или в синхронизируемой папке. Не запускайте две копии Finance с одной книгой.
+Finance must be the only app writing to your active workbook. Do not edit it in Excel while Finance is running, store it on a network drive or synced folder, or run two Finance instances against the same workbook.
 
-## Телефон — по желанию
+## Optional phone setup
 
-Для мобильного ввода нужны Obsidian Mobile и Syncthing. Откройте в Finance раздел **«Подключение телефона»**: он покажет шаги настройки и папку `Finance Sync`. В Obsidian установите BRAT, добавьте [репозиторий Finance Capture](https://github.com/gmdveast/finance-capture), установите последнюю доступную версию и включите плагин. Когда компьютер включён и папки синхронизированы, Finance импортирует операции из очереди в книгу.
+Mobile capture requires Obsidian Mobile and Syncthing. In Finance, open **Connect phone** for setup steps and the `Finance Sync` folder. In Obsidian, install BRAT, add the [Finance Capture plugin repository](https://github.com/gmdveast/finance-capture), install the latest available version, and enable the plugin. When your computer is on and the folders are synced, Finance imports queued transactions into the workbook.
 
-Установленная desktop-версия проверяет обновления при запуске. Текущий статус и ручная проверка доступны в **«Настройки» → «Обновление Finance»**; загрузка и установка начинаются только после подтверждения. Плагин Obsidian обновляется отдельно через BRAT. Версию desktop-приложения можно откатить из «Настроек».
+The installed desktop app checks for updates on startup. View the status or check manually under **Settings → Finance updates**. Downloads and installation begin only after you confirm. The Obsidian plugin is updated separately through BRAT. You can roll back the desktop app from Settings.
 
-## Приватность и помощь
+## Privacy and support
 
-Книга и операции не отправляются на сервер Finance. Desktop получает курсы валют с сайта ЦБ РФ; установленная версия при запуске и ручной проверке обращается к GitHub за сведениями о выпусках. Поддерживается Windows x64.
+Your workbook and transactions are not sent to Finance servers. The desktop app fetches exchange rates from the Central Bank of Russia. The installed app contacts GitHub on startup and when you manually check for releases. Finance supports Windows x64.
 
-При сообщении об ошибке укажите версию Finance и шаги воспроизведения. Не отправляйте книгу, recovery ZIP или снимки экрана с финансовыми данными.
+When reporting an issue, include your Finance version and the steps to reproduce it. Do not send your workbook, recovery ZIP, or screenshots containing financial data.
