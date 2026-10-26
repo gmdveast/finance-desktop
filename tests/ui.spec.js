@@ -161,15 +161,34 @@ scenario('фоновая проверка показывает цветной и
   await expect(settingsButton).toHaveAttribute('aria-label', 'Настройки. Доступно обновление Finance 1.0.0-beta.2');
   await expect(indicator).toBeVisible();
   await expect(indicator).toHaveCSS('background-color', 'rgb(255, 184, 77)');
+  const markerAlignment = await page.evaluate(() => {
+    const settings = document.querySelector('.nav-item[data-view="settings"]');
+    const overview = document.querySelector('.nav-item[data-view="overview"]');
+    const updateDot = settings.querySelector('.nav-update-indicator').getBoundingClientRect();
+    const overviewButton = overview.getBoundingClientRect();
+    const overviewRightPadding = Number.parseFloat(getComputedStyle(overview).paddingRight);
+    return {
+      updateDotRight: updateDot.right,
+      activeDotRight: overviewButton.right - overviewRightPadding,
+      activeDotColor: getComputedStyle(overview, '::after').backgroundColor,
+    };
+  });
+  expect(markerAlignment.activeDotColor).toBe('rgb(217, 255, 105)');
+  expect(Math.abs(markerAlignment.updateDotRight - markerAlignment.activeDotRight)).toBeLessThan(0.5);
   expect(updateCheckCount).toBe(1);
 
   await settingsButton.click();
   await expect(page.getByText('Доступна версия 1.0.0-beta.2 (beta).')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Скачать и установить' })).toBeVisible();
   await expect(settingsButton).toHaveAttribute('data-update-available', 'true');
-  expect(await settingsButton.evaluate((button) => getComputedStyle(button, '::after').backgroundColor)).toBe('rgb(217, 255, 105)');
+  expect(await settingsButton.evaluate((button) => getComputedStyle(button, '::after').content)).toBe('none');
   await expect(indicator).toHaveCSS('background-color', 'rgb(255, 184, 77)');
   expect(updateCheckCount).toBe(1);
+
+  const balanceButton = page.locator('.nav-item[data-view="balance"]');
+  await balanceButton.click();
+  expect(await balanceButton.evaluate((button) => getComputedStyle(button, '::after').backgroundColor)).toBe('rgb(217, 255, 105)');
+  await expect(indicator).toHaveCSS('background-color', 'rgb(255, 184, 77)');
 
   updateCheckFails = true;
   await page.reload();
@@ -198,6 +217,10 @@ scenario('сбой фоновой проверки не показывает н�
   const settingsButton = page.locator('.nav-item[data-view="settings"]');
   await expect(settingsButton).not.toHaveAttribute('data-update-available', 'true');
   await settingsButton.click();
+  const indicator = settingsButton.locator('.nav-update-indicator');
+  await expect(indicator).toBeVisible();
+  await expect(indicator).toHaveCSS('background-color', 'rgb(217, 255, 105)');
+  expect(await settingsButton.evaluate((button) => getComputedStyle(button, '::after').content)).toBe('none');
   await expect(page.locator('.settings-update-card .update-error')).toContainText('Не удалось проверить обновления. Повторите попытку.');
   await expect(page.locator('.settings-update-card')).not.toContainText('Установлена последняя доступная версия');
   await expect(page.locator('#toast-stack .toast')).toHaveCount(0);
@@ -898,6 +921,13 @@ scenario('операции фильтруются и сортируются по
     date: '2026-10-14', type: 'Доход', category: 'Работа / зарплата', amount: 15, necessity: '',
     notes: 'ui-filters-sort доход', sourceId: 'ui-filter-income',
   });
+  const operationIds = new Set([flexible, required, income]);
+  const expectedDateOrder = (await (await request.get('/api/data')).json()).operations
+    .filter((item) => operationIds.has(item.id))
+    .sort((a, b) => (b.date || '').localeCompare(a.date || '')
+      || Date.parse(b.recordedAt) - Date.parse(a.recordedAt)
+      || b.id - a.id)
+    .map((item) => item.id);
 
   try {
     await page.goto('/#operations');
@@ -929,6 +959,8 @@ scenario('операции фильтруются и сортируются по
     await page.locator('#clear-operation-filters').click();
     await page.locator('#operation-search').fill('ui-filters-sort');
     await expect(page.locator('[data-operation-row]')).toHaveCount(3);
+    const dateOrder = await page.locator('[data-operation-row]').evaluateAll((rows) => rows.map((item) => Number(item.dataset.operationRow)));
+    expect(dateOrder).toEqual(expectedDateOrder);
     await page.locator('[data-sort-key="amount"]').click();
     const ascending = await page.locator('[data-operation-row]').evaluateAll((rows) => rows.map((item) => Number(item.dataset.operationRow)));
     expect(ascending).toEqual([flexible, income, required]);
@@ -970,7 +1002,7 @@ scenario('обзор корректно объясняет расходы без
   const operations = expenses.map(([category, rubAmount, necessity], index) => ({
     id: index + 5, date: `2026-01-${String(20 - index).padStart(2, '0')}`, type: 'Расход', category,
     amount: rubAmount, currency: 'RUB', rate: 1, rubAmount,
-    necessity, notes: category, sourceId: '',
+    necessity, notes: category, sourceId: '', recordedAt: index === 0 ? '2026-01-20T12:30:00.000Z' : undefined,
   }));
   operations.push({
     id: 20, date: '2026-01-21', type: 'Перевод', category: '', amount: 999,
@@ -1015,6 +1047,14 @@ scenario('обзор корректно объясняет расходы без
   await expect(page.locator('.recent-card .card-head h2')).toHaveCSS('font-size', '17px');
   await expect(page.locator('.recent-card thead th:nth-child(7)')).toHaveCSS('text-align', 'right');
   await expect(page.locator('.recent-card tbody td:nth-child(7)').first()).toHaveCSS('text-align', 'right');
+  const recentDate = page.locator('.recent-card tbody tr').first().locator('.operation-date');
+  const recentDateOrder = await recentDate.evaluate((cell) => ({
+    timeIsFirst: cell.firstElementChild === cell.querySelector('time.operation-time'),
+    lines: cell.innerText.split('\n').map((line) => line.trim()).filter(Boolean),
+  }));
+  expect(recentDateOrder.timeIsFirst).toBeTruthy();
+  expect(recentDateOrder.lines[0]).toMatch(/^\d{2}:\d{2}$/u);
+  expect(recentDateOrder.lines[1]).toContain('2026');
 });
 
 scenario('инвестиции пополняют накопления, а вкладка накоплений оставляет только вывод', async ({ page, request }) => {
