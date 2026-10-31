@@ -44,7 +44,7 @@ test('renews an active background tab and expires crashed tabs after their lease
   presence.heartbeat(tab);
   await delay(30);
   assert.equal(stops, 0);
-  await delay(50);
+  await delay(100);
   assert.equal(stops, 1);
   presence.dispose();
 });

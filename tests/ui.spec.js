@@ -1832,12 +1832,44 @@ scenario('загрузка обновления показывает проце�
   await page.locator('[data-check-update]').click();
   page.once('dialog', (dialog) => dialog.accept());
   await page.locator('[data-install-update]').click();
-  await expect(page.locator('progress')).not.toHaveAttribute('value');
+  const progress = page.locator('.update-download-progress');
+  const expectProgressFullWidth = async () => {
+    const geometry = await page.evaluate(() => {
+      const bar = document.querySelector('.update-download-progress');
+      const block = bar?.closest('.settings-actions');
+      if (!bar || !block) return null;
+      const barRect = bar.getBoundingClientRect();
+      const blockRect = block.getBoundingClientRect();
+      const buttonRect = block.querySelector('[data-install-update]').getBoundingClientRect();
+      return {
+        barWidth: barRect.width,
+        blockWidth: blockRect.width,
+        leftInset: barRect.left - blockRect.left,
+        rightInset: blockRect.right - barRect.right,
+        belowButton: barRect.top >= buttonRect.bottom - 1,
+      };
+    });
+    expect(geometry).not.toBeNull();
+    expect(geometry.barWidth).toBeGreaterThan(0);
+    expect(Math.abs(geometry.barWidth - geometry.blockWidth)).toBeLessThanOrEqual(1);
+    expect(geometry.leftInset).toBeGreaterThanOrEqual(-1);
+    expect(geometry.rightInset).toBeGreaterThanOrEqual(-1);
+    expect(geometry.belowButton).toBeTruthy();
+  };
+  await expect(progress).toBeVisible();
+  await expect(progress).toHaveAttribute('aria-label', /.+/);
+  await expect(progress).not.toHaveAttribute('value');
+  await expectProgressFullWidth();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectProgressFullWidth();
   total = 100;
   await expect(page.locator('[data-install-update]')).toHaveText('Загрузка: 50%');
-  await expect(page.locator('progress')).toHaveAttribute('value', '50');
+  await expect(progress).toHaveAttribute('value', '50');
+  await expectProgressFullWidth();
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expectProgressFullWidth();
   complete();
-  await expect(page.locator('progress')).toHaveCount(0);
+  await expect(progress).toHaveCount(0);
 });
 
 if (process.env.FINANCE_TEST_REVERSE === '1') scenarios.reverse();

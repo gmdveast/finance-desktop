@@ -1336,6 +1336,7 @@ document.addEventListener('click', async (event) => {
     installUpdateButton.disabled = true;
     installUpdateButton.textContent = 'Загружаю и проверяю…';
     const progressElement = document.createElement('progress');
+    progressElement.className = 'update-download-progress';
     progressElement.max = 100;
     progressElement.setAttribute('aria-label', 'Загрузка установщика');
     installUpdateButton.insertAdjacentElement('afterend', progressElement);
