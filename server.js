@@ -26,6 +26,7 @@ const packageInfo = await readFile(path.join(__dirname, 'package.json'), 'utf8')
 const RELEASE_INFO = await readFile(path.join(__dirname, 'release-info.json'), 'utf8').then(JSON.parse).catch(() => ({ version: packageInfo.version || 'development', channel: 'development' }));
 const updateService = createUpdateService({ currentVersion: RELEASE_INFO.version, channel: RELEASE_INFO.channel });
 let updateInstallPending = false;
+let updateProgress = { stage: 'idle', received: 0, total: null };
 const DATA_DIR = path.resolve(process.env.FINANCE_DATA_DIR || path.join(__dirname, 'local-data'));
 const CONFIG_PATH = process.env.FINANCE_CONFIG_PATH
   ? path.resolve(process.env.FINANCE_CONFIG_PATH)
@@ -708,6 +709,7 @@ const OPENING_BALANCE_SHEET = '\u041d\u0430\u0447\u0430\u043b\u044c\u043d\u044b\
 function openingBalanceSheet(workbook) {
   const sheet = workbook.getWorksheet(OPENING_BALANCE_SHEET) || workbook.addWorksheet(OPENING_BALANCE_SHEET);
   if (!clean(sheet.getCell(1, 1).value)) ['ID счета', 'Сумма', 'Дата изменения'].forEach((value, index) => { sheet.getCell(1, index + 1).value = value; });
+  sheet.getCell(1, 4).value = '\u041a\u0443\u0440\u0441 \u0426\u0411 \u043d\u0430 \u0434\u0430\u0442\u0443';
   return sheet;
 }
 
@@ -717,7 +719,8 @@ function readOpeningBalances(workbook) {
   for (let row = 2; row <= sheet.rowCount; row += 1) {
     const accountId = asNumber(sheet.getCell(row, 1).value);
     if (!accountId) continue;
-    balances.push({ id: row, accountId, amount: asNumber(sheet.getCell(row, 2).value), date: dateToIso(sheet.getCell(row, 3).value) });
+    const rate = asNumber(sheet.getCell(row, 4).value);
+    balances.push({ id: row, accountId, amount: asNumber(sheet.getCell(row, 2).value), date: dateToIso(sheet.getCell(row, 3).value), rate: rate > 0 ? rate : null });
   }
   return balances;
 }
@@ -1729,7 +1732,7 @@ app.post('/api/settings/clear-data', async (req, res, next) => {
       if (mode === 'all') {
         clearSheetRows(savingAccounts, 2, 5);
         const opening = openingBalanceSheet(workbook);
-        clearSheetRows(opening, 2, 3);
+        clearSheetRows(opening, 2, 4);
       }
       balance.getCell(1, 14).value = JSON.stringify({ ...reset, ids: [] });
       const state = identityState(workbook);
@@ -1856,6 +1859,35 @@ app.post('/api/operations', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+export async function repairOpeningBalanceRatesOnce() {
+  return mutateWorkbook(async (workbook) => {
+    const accounts = readAccounts(workbook);
+    const missing = readOpeningBalances(workbook).filter((item) => !(item.rate > 0));
+    const updates = [];
+    const unavailable = [];
+    for (const item of missing) {
+      const account = accounts.find((entry) => entry.id === item.accountId);
+      if (!account || !calendarDate(item.date)) { unavailable.push(item.accountId); continue; }
+      const key = `${account.currency}:${item.date}`;
+      if (mutationContext.getStore().unavailableOptionalRates.has(key)) { unavailable.push(item.accountId); continue; }
+      let rate;
+      try { rate = (await fetchCbrRate(account.currency, item.date)).rate; }
+      catch (error) { if (error instanceof PrepareRate) throw new PrepareReferenceRate(account.currency, item.date); throw error; }
+      updates.push({ ...item, rate });
+    }
+    const result = { repaired: updates.length, unavailable };
+    if (!updates.length) return { skipSave: true, result };
+    const sheet = openingBalanceSheet(workbook);
+    sheet.getCell(1, 4).value = 'Курс ЦБ на дату';
+    for (const item of updates) sheet.getCell(item.id, 4).value = item.rate;
+    return result;
+  });
+}
+
+app.post('/api/operations/opening-balance/repair-rates', async (req, res, next) => {
+  try { res.json(await repairOpeningBalanceRatesOnce()); } catch (error) { next(error); }
+});
+
 app.put('/api/operations/opening-balance', async (req, res, next) => {
   try {
     const accountId = rowId(req.body?.accountId);
@@ -1863,19 +1895,23 @@ app.put('/api/operations/opening-balance', async (req, res, next) => {
     const date = req.body?.date ?? localIsoDate();
     if (!calendarDate(date) || !Number.isFinite(Date.parse(`${date}T00:00:00Z`))) throw new InputError('Укажите корректную дату начального баланса.');
     if (!Number.isInteger(accountId) || !Number.isFinite(amount) || amount < 0) throw new InputError('Выберите счёт и укажите неотрицательную сумму.');
-    const payload = await mutateWorkbook((workbook) => {
+    const payload = await mutateWorkbook(async (workbook) => {
       const account = readAccounts(workbook).find((item) => item.id === accountId && item.active);
       if (!account) throw new InputError('Начальный баланс можно задать только для активного обычного счёта.');
+      const { rate } = await fetchCbrRate(account.currency, date);
+      if (!Number.isFinite(rate) || rate <= 0 || amount * rate > 1e12) throw new InputError('Проверьте курс и рублёвый эквивалент начального баланса.');
       const sheet = openingBalanceSheet(workbook);
+      sheet.getCell(1, 4).value = 'Курс ЦБ на дату';
       const rows = [];
       for (let index = 2; index <= sheet.rowCount; index += 1) if (asNumber(sheet.getCell(index, 1).value) === accountId) rows.push(index);
       const hadExisting = rows.length > 0;
       const row = rows.pop() || Math.max(2, sheet.rowCount + 1);
-      rows.forEach((duplicate) => { for (let column = 1; column <= 3; column += 1) sheet.getCell(duplicate, column).value = null; });
+      rows.forEach((duplicate) => { for (let column = 1; column <= 4; column += 1) sheet.getCell(duplicate, column).value = null; });
       sheet.getCell(row, 1).value = accountId;
       sheet.getCell(row, 2).value = amount;
       sheet.getCell(row, 3).value = excelDate(date);
-      return { accountId, amount, date, replaced: hadExisting };
+      sheet.getCell(row, 4).value = rate;
+      return { accountId, amount, date, rate, replaced: hadExisting };
     });
     res.json(payload);
   } catch (error) { next(error); }
@@ -2154,6 +2190,7 @@ app.put('/api/lists', async (req, res, next) => {
 app.put('/api/accounts', async (req, res, next) => {
   try {
     if (!Array.isArray(req.body?.accounts) || req.body.accounts.length > 100) throw new InputError('Не переданы счета.');
+    const createdAt = localIsoDate();
     const payload = await mutateWorkbook(async (workbook) => {
       if (!hasAccountModel(workbook)) throw new InputError('Сначала выполните миграцию счетов.');
       const sheet = workbook.getWorksheet('Баланс');
@@ -2194,6 +2231,8 @@ app.put('/api/accounts', async (req, res, next) => {
         if (!allowedCurrencies.has(currency)) throw new InputError(`Валюта ${currency} отсутствует в справочнике.`);
         if ((linkedOperations.length || openingIds.has(row)) && current?.currency && currency !== current.currency) throw new InputError(`Нельзя менять валюту счёта «${current.name}» с операциями или начальным балансом. Создайте новый счёт.`);
         if (!(rate > 0)) throw new InputError(`Укажите курс для счёта «${name}».`);
+        const openingRate = isNew ? (await fetchCbrRate(currency, createdAt)).rate : null;
+        if (isNew && (!(openingRate > 0) || !Number.isFinite(openingRate))) throw new InputError('Не удалось сохранить начальный баланс 0: курс ЦБ на дату создания счёта недоступен.');
         sheet.getCell(row, 1).value = name;
         sheet.getCell(row, 2).value = currency;
         if (isNew) {
@@ -2201,6 +2240,12 @@ app.put('/api/accounts', async (req, res, next) => {
           sheet.hideColumn(13);
         }
         sheet.getCell(row, 4).value = currency === 'RUB' ? null : rate;
+        if (isNew) {
+          const openingSheet = openingBalanceSheet(workbook);
+          let openingRow = 2;
+          while ([1, 2, 3, 4].some((column) => clean(openingSheet.getCell(openingRow, column).value))) openingRow += 1;
+          [row, 0, excelDate(createdAt), openingRate].forEach((value, index) => { openingSheet.getCell(openingRow, index + 1).value = value; });
+        }
       }
       return { updated: true, created };
     });
@@ -2224,10 +2269,18 @@ app.delete('/api/accounts/:id', async (req, res, next) => {
       if (!account) throw new InputError('Счёт не найден.');
       if (activeAccounts.length <= 1) throw new InputError('Нельзя удалить единственный активный счёт.');
       const linked = readOperations(workbook).some((operation) => operation.accountId === row || operation.destinationAccountId === row);
-      if (readOpeningBalances(workbook).some((item) => item.accountId === row)) throw new InputError('Счёт с начальным балансом нельзя удалить.');
+      const openingBalances = readOpeningBalances(workbook).filter((item) => item.accountId === row);
+      if (openingBalances.some((item) => item.amount !== 0)) throw new InputError('Счёт с ненулевым начальным балансом нельзя удалить.');
       if (linked) throw new InputError(`Счёт «${account.name}» используется операциями и не может быть удалён.`);
       const sheet = workbook.getWorksheet('Баланс');
       for (let column = 1; column <= 13; column += 1) sheet.getCell(row, column).value = null;
+      const openingSheet = workbook.getWorksheet(OPENING_BALANCE_SHEET);
+      if (openingSheet) {
+        for (let index = 2; index <= openingSheet.rowCount; index += 1) {
+          if (asNumber(openingSheet.getCell(index, 1).value) !== row) continue;
+          for (let column = 1; column <= 4; column += 1) openingSheet.getCell(index, column).value = null;
+        }
+      }
       return { deleted: true, id: row };
     });
     try {
@@ -2416,6 +2469,8 @@ app.get('/api/updates/check', async (_req, res) => {
   }
 });
 
+app.get('/api/updates/progress', (_req, res) => res.json(updateProgress));
+
 app.post('/api/updates/install', async (req, res) => {
   if (process.platform !== 'win32' || !process.env.FINANCE_INSTALL_ROOT || !['beta', 'stable'].includes(RELEASE_INFO.channel)) {
     return res.status(409).json({ error: 'Установка обновлений доступна только в упакованной версии Finance для Windows.', code: 'UPDATE_INSTALL_UNAVAILABLE', retryable: false });
@@ -2425,11 +2480,14 @@ app.post('/api/updates/install', async (req, res) => {
   try { version = textField(req.body?.version, 80, 'version', { optional: false }); }
   catch { return res.status(400).json({ error: 'Некорректная версия обновления.', code: 'INVALID_INPUT', retryable: false }); }
   let installerPath = null;
+  updateInstallPending = true;
+  updateProgress = { stage: 'downloading', received: 0, total: null };
   try {
-    const downloaded = await updateService.downloadInstaller(version);
+    const downloaded = await updateService.downloadInstaller(version, { onProgress: (progress) => { updateProgress = progress; } });
     installerPath = path.join(tmpdir(), `Finance-Update-${version}-${randomUUID()}.exe`);
     await writeFile(installerPath, downloaded.bytes, { flag: 'wx', mode: 0o600 });
     updateInstallPending = true;
+    updateProgress = { ...updateProgress, stage: 'launching' };
     res.status(202).json({ queued: true, version: downloaded.version });
     res.once('finish', () => {
       launchDesktopHelper('install', [installerPath]);
@@ -2437,6 +2495,8 @@ app.post('/api/updates/install', async (req, res) => {
       pendingTimeout.unref();
     });
   } catch (error) {
+    updateInstallPending = false;
+    updateProgress = { ...updateProgress, stage: 'error' };
     if (installerPath) await unlink(installerPath).catch(() => {});
     diagnose(error);
     res.status(502).json({ error: 'Не удалось загрузить и проверить установщик. Приложение и ваши данные не менялись.', code: 'UPDATE_DOWNLOAD_FAILED', retryable: true });

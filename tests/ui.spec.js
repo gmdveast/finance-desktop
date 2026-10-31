@@ -42,6 +42,31 @@ scenario('настройки отдельно показывают обновл�
 scenario('настройки выравнивают кнопки по нижнему краю; иконки и логотип без ореола', async ({ page }) => {
   await page.goto('/#settings');
   await expect(page.locator('.settings-grid')).toBeVisible();
+  for (const width of [1280, 420]) {
+    await page.setViewportSize({ width, height: 900 });
+    const heights = await page.locator('[data-clear-data], [data-check-update]').evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().height));
+    expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(1);
+    await expect(page.locator('#toast-stack')).toHaveCSS('scrollbar-width', 'none');
+  }
+  await page.setViewportSize({ width: 420, height: 300 });
+  const toastStack = page.locator('#toast-stack');
+  await toastStack.evaluate((stack) => {
+    for (let i = 0; i < 10; i += 1) {
+      const toast = document.createElement('div');
+      toast.className = 'toast show';
+      toast.innerHTML = `<span class="toast-message">Уведомление ${i}</span><button class="toast-close">×</button>`;
+      stack.append(toast);
+    }
+  });
+  const toastScroll = await toastStack.evaluate((stack) => {
+    const maxScroll = stack.scrollHeight - stack.clientHeight;
+    stack.scrollTop = maxScroll;
+    return { maxScroll, scrollTop: stack.scrollTop, overflowY: getComputedStyle(stack).overflowY };
+  });
+  expect(toastScroll.maxScroll).toBeGreaterThan(0);
+  expect(toastScroll.scrollTop).toBeGreaterThan(0);
+  expect(toastScroll.overflowY).toBe('auto');
+  await page.setViewportSize({ width: 1280, height: 900 });
   await expect(page.locator('[data-action="refresh-rates"]')).toBeHidden();
   await expect(page.locator('[data-action="add-operation"]')).toBeHidden();
   const settingsLayout = await page.locator('.settings-grid').evaluate((grid) => [...grid.querySelectorAll(':scope > .settings-card')].map((card) => {
@@ -1030,9 +1055,9 @@ scenario('обзор корректно объясняет расходы без
 
   await expect(page.getByLabel('Расходы по необходимости')).toContainText('2 200,5 ₽ · 79%');
   await expect(page.getByLabel('Расходы по необходимости')).toContainText('600 ₽ · 21%');
-  await expect(page.locator('.category-row')).toHaveCount(6);
+  await expect(page.locator('.category-row')).toHaveCount(7);
   await expect(page.locator('.category-row').filter({ hasText: 'Жильё' })).toContainText('25%');
-  await expect(page.locator('.category-row').filter({ hasText: 'Остальные' })).toContainText('300 ₽');
+  await expect(page.locator('.category-row').filter({ hasText: 'Остальные' })).toHaveCount(0);
 
   await expect(page.locator('.chart-label').first()).toHaveText('авг 25');
   await expect(page.locator('.chart-label').last()).toHaveText('янв 26');
@@ -1464,8 +1489,10 @@ scenario('lifecycle: closing one real browser tab keeps Finance alive until the 
   await expect.poll(health, { timeout: 25_000 }).toBe(0);
 });
 
-scenario('lifecycle: closing the whole browser stops Finance by pagehide or the presence lease', async ({ page, browser, financeServer }) => {
+scenario('lifecycle: closing the whole browser stops Finance by pagehide or the presence lease', async ({ browser, financeServer }) => {
   test.setTimeout(180_000);
+  const isolatedBrowser = await browser.browserType().launch();
+  const page = await isolatedBrowser.newPage();
   const { baseURL, presenceEvents } = financeServer;
   const origin = new URL(baseURL).origin;
   const health = async () => fetch(`${origin}/api/settings`, { signal: AbortSignal.timeout(500) })
@@ -1475,7 +1502,7 @@ scenario('lifecycle: closing the whole browser stops Finance by pagehide or the 
   await expect.poll(() => presenceEvents.some(({ body }) => body?.active === true)).toBe(true);
   const closedAt = performance.now();
 
-  await browser.close();
+  await isolatedBrowser.close();
   await expect.poll(health, { timeout: 165_000, intervals: [500, 1000, 2000] }).toBe(0);
 
   const elapsedMs = performance.now() - closedAt;
@@ -1486,6 +1513,175 @@ scenario('lifecycle: closing the whole browser stops Finance by pagehide or the 
   } else {
     expect(elapsedMs).toBeGreaterThanOrEqual(100_000);
   }
+});
+
+scenario('обзор включает начальный баланс только по переключателю', async ({ page, request }) => {
+  const data = await (await request.get('/api/data')).json();
+  await request.put('/api/operations/opening-balance', { data: { accountId: data.accounts[0].id, amount: 1234, date: '2026-10-03' } });
+  await page.goto('/#overview');
+  const income = page.locator('[data-overview-metric="income"] .metric-value');
+  const before = await income.textContent();
+  await page.locator('#overview-opening-toggle').check();
+  await expect(income).not.toHaveText(before);
+  await page.locator('#overview-direction').selectOption('income');
+  await expect(page.locator('.category-list')).toContainText('Начальный баланс');
+  await page.locator('#overview-opening-toggle').uncheck();
+  await expect(income).toHaveText(before);
+  await expect(page.locator('.category-list')).not.toContainText('Начальный баланс');
+});
+
+scenario('ошибка сохранения начального баланса показывается попапом', async ({ page }) => {
+  await page.route('**/api/operations/opening-balance', (route) => route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ error: 'Курс ЦБ недоступен', code: 'UPSTREAM_UNAVAILABLE', retryable: true }) }));
+  await page.goto('/#operations');
+  await page.getByRole('tab', { name: 'Начальные балансы' }).click();
+  await page.locator('#opening-balance-form [name="amount"]').fill('20');
+  const popup = page.waitForEvent('dialog');
+  await page.locator('#opening-balance-form button[type="submit"]').click();
+  const dialog = await popup;
+  expect(dialog.message()).toContain('Начальный баланс не сохранён');
+  await dialog.accept();
+});
+
+scenario('сумма форматируется тысячами и сохраняется без потери точности', async ({ page, request }) => {
+  await page.goto('/#overview');
+  await page.locator('[data-action="add-operation"]').click();
+  const form = page.locator('#operation-form');
+  await form.locator('[name="amount"]').fill('1234567.123456');
+  await expect(form.locator('[name="amount"]')).toHaveValue('1,234,567.123456');
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.evaluate(() => navigator.clipboard.writeText('7654321.111111'));
+  await form.locator('[name="amount"]').fill('');
+  await form.locator('[name="amount"]').focus();
+  await page.keyboard.press('Control+V');
+  await expect(form.locator('[name="amount"]')).toHaveValue('7,654,321.111111');
+  const saved = page.waitForResponse((response) => response.url().endsWith('/api/operations') && response.request().method() === 'POST');
+  await page.locator('#save-operation').click();
+  expect((await saved).ok()).toBeTruthy();
+  const data = await (await request.get('/api/data')).json();
+  expect(data.operations.some((item) => item.amount === 7654321.111111)).toBeTruthy();
+});
+
+scenario('new ordinary account immediately has a dated zero opening balance', async ({ page, request }) => {
+  const name = 'New account zero opening';
+  const response = await request.put('/api/accounts', { data: { accounts: [{ name, currency: 'RUB', rate: 1 }] } });
+  expect(response.ok(), await response.text()).toBeTruthy();
+  const created = await response.json();
+  const accountId = created.result.created[0];
+  const opening = created.data.openingBalances.find((item) => item.accountId === accountId);
+  expect(opening).toMatchObject({ amount: 0, date: '2026-10-16', rate: 1 });
+
+  await page.goto('/#operations');
+  await page.locator('[data-operations-section="opening-balances"]').click();
+  const row = page.locator('.opening-balance-table tbody tr').filter({ hasText: name });
+  await expect(row).toBeVisible();
+  await expect(row.locator('td').first()).not.toBeEmpty();
+  await expect(row.locator('td').nth(3)).toHaveText('1');
+  await expect(row).toContainText('0');
+});
+
+scenario('a new foreign account shows a popup and stays unsaved without its CBR rate', async ({ page }) => {
+  await page.route(/\/api\/rates\?currency=USD/, (route) => route.fulfill({
+    status: 502,
+    contentType: 'application/json',
+    body: JSON.stringify({ error: 'Служба курсов недоступна. Повторите запрос позже.', code: 'EXTERNAL_SERVICE', retryable: true }),
+  }));
+  await page.goto('/#balance');
+  await page.locator('[data-add-account]').click();
+  const currency = page.locator('.new-account-row [name="currency"]');
+  const popupPromise = page.waitForEvent('dialog');
+  const selectionPromise = currency.selectOption('USD');
+  const popup = await popupPromise;
+  expect(popup.message()).toContain('Валютный счёт с начальным балансом 0 нельзя сохранить без курса.');
+  await popup.accept();
+  await selectionPromise;
+  expect(await page.locator('.new-account-row [name="rate"]').evaluate((input) => input.validity.valid)).toBe(false);
+  await expect(page.locator('.new-account-row')).toBeVisible();
+});
+
+scenario('amount fields reject letters and unsupported symbols', async ({ page }) => {
+  await page.goto('/#overview');
+  await page.locator('[data-action="add-operation"]').click();
+  const amount = page.locator('#operation-form [name="amount"]');
+  await amount.fill('12abc$');
+  expect(await amount.evaluate((input) => input.validity.valid)).toBe(false);
+  const operationPosts = [];
+  page.on('request', (request) => {
+    if (request.url().endsWith('/api/operations') && request.method() === 'POST') operationPosts.push(request);
+  });
+  await page.locator('#save-operation').click();
+  await expect(page.locator('#operation-dialog')).toBeVisible();
+  expect(operationPosts).toHaveLength(0);
+
+  await amount.fill('');
+  await amount.pressSequentially('12abc$');
+  await expect(amount).toHaveValue('12');
+});
+
+scenario('структура обзора прокручивается при длинном списке и показывает пустую группу', async ({ page }) => {
+  await page.route('**/api/data', async (route) => {
+    const response = await route.fetch();
+    const data = await response.json();
+    const account = data.accounts[0];
+    const lots = Array.from({ length: 24 }, (_, index) => ({
+      name: `UI Long Category ${String(index).padStart(2, '0')}`,
+      type: 'Расход',
+      emoji: '📌',
+    }));
+    data.lists.categories.push(...lots);
+    data.operations = lots.map((category, index) => ({
+      id: index + 1000,
+      date: '2026-10-03',
+      type: 'Расход',
+      category: category.name,
+      amount: 1,
+      currency: account.currency,
+      rate: account.rate,
+      rubAmount: 1,
+      necessity: 'Обязательная',
+      accountId: account.id,
+      notes: '',
+    }));
+    await route.fulfill({ response, body: JSON.stringify(data) });
+  });
+  await page.goto('/#overview');
+  const dimensions = await page.locator('.category-list').evaluate((list) => ({ scrollHeight: list.scrollHeight, clientHeight: list.clientHeight, overflowY: getComputedStyle(list).overflowY }));
+  expect(dimensions.scrollHeight).toBeGreaterThan(dimensions.clientHeight);
+  expect(dimensions.overflowY).toBe('auto');
+  await page.locator('#overview-direction').selectOption('income');
+  await expect(page.locator('.category-list .empty-state')).toBeVisible();
+});
+
+scenario('категории истории группируются по периоду и остальным фильтрам', async ({ page, request }) => {
+  const data = await (await request.get('/api/data')).json();
+  const category = data.lists.categories.find((item) => item.type === 'Доход');
+  const created = await request.post('/api/operations', { data: { date: data.asOfDate, type: 'Доход', category: category.name, accountId: data.accounts[0].id, amount: 100, currency: data.accounts[0].currency, rate: data.accounts[0].rate, notes: 'unique-category-filter' } });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  await page.goto('/#operations');
+  await page.locator('#operation-search').fill('unique-category-filter');
+  await expect(page.locator('#operation-category optgroup').first().locator('option')).toHaveCount(1);
+  await expect(page.locator('#operation-category optgroup').first()).toContainText(category.name);
+  await page.locator('#operation-month').fill('2026-09');
+  await expect(page.locator('#operation-category optgroup').first().locator('option')).toHaveCount(0);
+  await expect(page.locator('#operation-category optgroup').last()).toContainText(category.name);
+});
+
+scenario('загрузка обновления показывает проценты и неопределённый прогресс', async ({ page }) => {
+  await page.route('**/api/updates/check', (route) => route.fulfill({ json: { enabled: true, currentVersion: '1.2.2', channel: 'stable', update: { version: '1.3.0', channel: 'stable', url: 'https://github.com/gmdveast/finance-desktop/releases/tag/v1.3.0' } } }));
+  let total = null;
+  await page.route('**/api/updates/progress', (route) => route.fulfill({ json: { stage: 'downloading', received: 50, total } }));
+  let complete;
+  const gate = new Promise((resolve) => { complete = resolve; });
+  await page.route('**/api/updates/install', async (route) => { await gate; await route.fulfill({ status: 202, json: { queued: true, version: '1.3.0' } }); });
+  await page.goto('/#settings');
+  await page.locator('[data-check-update]').click();
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.locator('[data-install-update]').click();
+  await expect(page.locator('progress')).not.toHaveAttribute('value');
+  total = 100;
+  await expect(page.locator('[data-install-update]')).toHaveText('Загрузка: 50%');
+  await expect(page.locator('progress')).toHaveAttribute('value', '50');
+  complete();
+  await expect(page.locator('progress')).toHaveCount(0);
 });
 
 if (process.env.FINANCE_TEST_REVERSE === '1') scenarios.reverse();

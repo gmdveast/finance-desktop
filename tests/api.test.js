@@ -284,6 +284,9 @@ function defineScenarios(context, scenario) {
     assert.equal(saved.response.status, 200);
     assert.deepEqual(saved.payload.result.created, [5]);
     assert.equal(saved.payload.data.accounts.find((item) => item.id === 5).calculatedBalance, 0);
+    assert.deepEqual(saved.payload.data.openingBalances.find((item) => item.accountId === 5), {
+      id: 2, accountId: 5, amount: 0, date: '2026-10-16', rate: 1,
+    });
     assert.equal(saved.payload.mobileLists.changed, true);
   });
 
@@ -343,6 +346,9 @@ function defineScenarios(context, scenario) {
     });
     assert.equal(created.response.status, 200);
     const createdId = created.payload.result.created[0];
+    assert.deepEqual(created.payload.data.openingBalances.find((item) => item.accountId === createdId), {
+      id: 2, accountId: createdId, amount: 0, date: '2026-10-16', rate: 83.9153,
+    });
     assert.ok(created.payload.data.accounts.some((account) => account.id === createdId));
     assert.ok(created.payload.data.lists.accounts.some((account) => account.id === createdId));
     assert.equal(created.payload.mobileLists.changed, true);
@@ -350,6 +356,7 @@ function defineScenarios(context, scenario) {
     const removed = await jsonRequest(baseUrl, `/api/accounts/${createdId}`, { method: 'DELETE' });
     assert.equal(removed.response.status, 200);
     assert.ok(!removed.payload.data.accounts.some((account) => account.id === createdId));
+    assert.ok(!removed.payload.data.openingBalances.some((item) => item.accountId === createdId));
     assert.ok(!removed.payload.data.lists.accounts.some((account) => account.id === createdId));
     assert.equal(removed.payload.mobileLists.changed, true);
     const synced = JSON.parse(await readFile(path.join(sandbox, 'default-sync', 'config', 'lists.json'), 'utf8'));
@@ -1270,10 +1277,65 @@ function defineScenarios(context, scenario) {
     assert.equal(second.payload.data.openingBalances.filter((item) => item.accountId === account.id).length, 1);
     assert.equal(second.payload.data.openingBalances.find((item) => item.accountId === account.id).amount, 456);
     assert.equal(second.payload.data.openingBalances.find((item) => item.accountId === account.id).date, '2026-09-30');
+    assert.equal(second.payload.data.openingBalances.find((item) => item.accountId === account.id).rate, 1);
+    const beforeRepair = await sha256(workbook);
+    const repair = await jsonRequest(baseUrl, '/api/operations/opening-balance/repair-rates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(repair.response.status, 200);
+    assert.equal(repair.payload.result.repaired, 0);
+    assert.equal(await sha256(workbook), beforeRepair);
     assert.equal(second.payload.data.accounts.find((item) => item.id === account.id).calculatedBalance, account.calculatedBalance + 456);
     assert.equal(second.payload.data.operations.length, beforeOperations);
     const invalid = await jsonRequest(baseUrl, '/api/operations/opening-balance', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accountId: 9999, amount: 1 }) });
     assert.equal(invalid.response.status, 400);
+  });
+
+  scenario('валютный начальный баланс сохраняет исторический курс и отказывает без записи при сбое ЦБ', async () => {
+    const first = await send('/api/operations/opening-balance', { accountId: 6, amount: 12.345678, date: '2020-03-15' }, 'PUT');
+    assert.equal(first.response.status, 200);
+    assert.equal(first.payload.data.openingBalances.find((item) => item.accountId === 6).rate, 32.2642);
+    const count = requestedDates.length;
+    const second = await send('/api/operations/opening-balance', { accountId: 6, amount: 20, date: '2020-03-15' }, 'PUT');
+    assert.equal(second.response.status, 200);
+    assert.equal(requestedDates.length, count);
+    const before = await sha256(workbook);
+    const backupNames = await readdir(backups);
+    rates.unavailable = true;
+    const failed = await send('/api/operations/opening-balance', { accountId: 6, amount: 30, date: '2020-03-16' }, 'PUT');
+    assert.equal(failed.response.status, 502);
+    assert.equal(await sha256(workbook), before);
+    assert.deepEqual(await readdir(backups), backupNames);
+  });
+
+  scenario('new foreign account is not saved when its creation-date CBR rate is unavailable', async () => {
+    const before = await sha256(workbook);
+    const backupNames = await readdir(backups);
+    rates.unavailable = true;
+    const failed = await send('/api/accounts', { accounts: [{ name: 'No opening rate', currency: 'GEL', rate: 32.2642 }] }, 'PUT');
+    assert.equal(failed.response.status, 502);
+    assert.equal(await sha256(workbook), before);
+    assert.deepEqual(await readdir(backups), backupNames);
+  });
+
+  scenario('заполнение старых начальных курсов идемпотентно и сохраняет суммы', async () => {
+    const book = await loadWorkbook();
+    const sheet = book.getWorksheet('Начальные балансы') || book.addWorksheet('Начальные балансы');
+    // This workbook is the scenario-owned synthetic fixture only.
+    sheet.getCell(2, 1).value = 6;
+    sheet.getCell(2, 2).value = 42;
+    sheet.getCell(2, 3).value = '2020-03-15';
+    await book.writeFile(workbook);
+    const repaired = await send('/api/operations/opening-balance/repair-rates', {});
+    assert.equal(repaired.response.status, 200);
+    assert.equal(repaired.payload.result.repaired, 1);
+    const balance = repaired.payload.data.openingBalances.find((item) => item.accountId === 6);
+    assert.equal(balance.amount, 42);
+    assert.equal(balance.rate, 32.2642);
+    assert.ok(repaired.payload.backup);
+    const before = await sha256(workbook);
+    const repeat = await send('/api/operations/opening-balance/repair-rates', {});
+    assert.equal(repeat.payload.result.repaired, 0);
+    assert.equal(repeat.payload.backup, null);
+    assert.equal(await sha256(workbook), before);
   });
 
   scenario('identity: удалённое событие не возвращается после перезапуска', async () => {

@@ -24,6 +24,10 @@ test('desktop shortcut is selected by default on fresh installs and updates', ()
 });
 
 test('desktop default remains user-changeable and autostart remains opt-in', () => {
+  const desktopIcon = iconSection.split(/\r?\n/).find((line) => line.startsWith('Name: "{autodesktop}'));
+  assert.match(desktopIcon, /Check: DesktopShortcutMissing/);
+  assert.match(desktopIcon, /IconFilename: "\{app\}\\finance.ico"/);
+  assert.match(codeSection, /Result := not FileExists\(ExpandConstant\('\{autodesktop\}\\Finance.lnk'\)\)/);
   assert.match(desktopTask, /Description: "Создать ярлык на рабочем столе"/);
   assert.match(installerScript, /if \(CurPageID = wpSelectTasks\) and not DesktopIconTaskDefaultApplied then[\s\S]*?WizardForm\.TasksList\.Checked\[0\] := True;/);
   assert.match(autostartTask, /Flags: unchecked/);
@@ -58,9 +62,9 @@ test('Windows package output can use a dedicated directory confined to .release'
   assert.match(packageScript, /lib\\client-presence\.mjs/);
 });
 
-test('project, lock file and installer default share the 1.2.2 release version', () => {
-  assert.equal(packageInfo.version, '1.2.2');
-  assert.equal(lockInfo.version, '1.2.2');
-  assert.equal(lockInfo.packages[''].version, '1.2.2');
-  assert.match(installerScript, /#define AppVersion "1\.2\.2"/);
+test('project, lock file and installer default share the 1.3.0 release version', () => {
+  assert.equal(packageInfo.version, '1.3.0');
+  assert.equal(lockInfo.version, '1.3.0');
+  assert.equal(lockInfo.packages[''].version, '1.3.0');
+  assert.match(installerScript, /#define AppVersion "1\.3\.0"/);
 });

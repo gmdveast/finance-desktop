@@ -1,5 +1,5 @@
 ﻿#ifndef AppVersion
-  #define AppVersion "1.2.2"
+  #define AppVersion "1.3.0"
 #endif
 #ifndef AppArch
   #define AppArch "x64"
@@ -43,10 +43,11 @@ Source: "{#StageDir}\*"; DestDir: "{app}\versions\{#AppVersion}"; Flags: ignorev
 Source: "{#StageDir}\scripts\finance-start.vbs"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "{#StageDir}\scripts\finance-stop.vbs"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "{#StageDir}\scripts\finance-rollback.vbs"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "{#StageDir}\finance.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-start.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\versions\{#AppVersion}\finance.ico"; IconIndex: 0
-Name: "{autodesktop}\Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-start.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\versions\{#AppVersion}\finance.ico"; IconIndex: 0; Tasks: desktopicon
+Name: "{autodesktop}\Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-start.vbs"""; WorkingDir: "{app}"; IconFilename: "{app}\finance.ico"; IconIndex: 0; Tasks: desktopicon; Check: DesktopShortcutMissing
 Name: "{userstartup}\Finance"; Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-start.vbs"""; WorkingDir: "{app}"; Tasks: autostart
 
 [Run]
@@ -55,6 +56,11 @@ Filename: "{sys}\wscript.exe"; Parameters: """{app}\scripts\finance-start.vbs"""
 [Code]
 var
   DesktopIconTaskDefaultApplied: Boolean;
+
+function DesktopShortcutMissing: Boolean;
+begin
+  Result := not FileExists(ExpandConstant('{autodesktop}\Finance.lnk'));
+end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin

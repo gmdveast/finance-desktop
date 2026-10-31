@@ -110,7 +110,11 @@ test('installer body may outlast the response-header timeout and is still verifi
     downloadTimeouts: { request: 10, idle: 100, total: 200 },
   });
 
-  assert.deepEqual((await service.downloadInstaller('1.0.1')).bytes, bytes);
+  const progress = [];
+  assert.deepEqual((await service.downloadInstaller('1.0.1', { onProgress: (value) => progress.push(value) })).bytes, bytes);
+  assert.equal(progress[0].received, 0);
+  assert.ok(progress.some((item) => item.stage === 'downloading' && item.received === 8));
+  assert.deepEqual(progress.at(-1), { stage: 'verifying', received: bytes.length, total: bytes.length });
 });
 
 test('installer download fails when the response body stops making progress', async () => {

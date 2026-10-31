@@ -19,6 +19,68 @@ const restoreForm = document.querySelector('#restore-form');
 const VIEWS = ['overview', 'operations', 'balance', 'savings', 'lists', 'phone', 'settings'];
 const PHONE_CHECKS_KEY = 'finance-phone-setup-checks';
 
+const amountSelector = '#operation-form [name="amount"], #operation-form [name="destinationAmount"], #savings-transfer-form [name="savingAmount"], #savings-transfer-form [name="mainAmount"], #opening-balance-form [name="amount"], #savings-create-form [name="initialCapital"], .savings-increase-form [name="amount"]';
+const signedAmountSelector = '.savings-increase-form [name="amount"]';
+function amountPattern(signed) {
+  return `${signed ? '-?' : ''}(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\\.[0-9]+)?`;
+}
+function amountInsertionAllowed(input, value, signed) {
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? start;
+  const candidate = input.value.slice(0, start) + value + input.value.slice(end);
+  return new RegExp(`^${signed ? '-?' : ''}[0-9,.]*$`).test(candidate);
+}
+function groupAmount(value, signed = false) {
+  const negative = signed && value.startsWith('-');
+  const raw = (negative ? value.slice(1) : value).replaceAll(',', '');
+  if (!/^\d*(\.\d*)?$/.test(raw)) return value;
+  const [whole, fraction] = raw.split('.');
+  return `${negative ? '-' : ''}${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}${fraction === undefined ? '' : `.${fraction}`}`;
+}
+function validateAmountInput(input) {
+  const signed = input.matches(signedAmountSelector);
+  const valid = !input.value || new RegExp(`^(?:${amountPattern(signed)})$`).test(input.value);
+  input.setCustomValidity(valid ? '' : '\\u0412\\u0432\\u043e\\u0434\\u0438\\u0442\\u0435 \\u0441\\u0443\\u043c\\u043c\\u0443 \\u0447\\u0438\\u0441\\u043b\\u043e\\u043c: \\u0446\\u0438\\u0444\\u0440\\u044b, \\u0437\\u0430\\u043f\\u044f\\u0442\\u044b\\u0435 \\u0438 \\u0442\\u043e\\u0447\\u043a\\u0430 \\u0434\\u043b\\u044f \\u0434\\u0440\\u043e\\u0431\\u043d\\u043e\\u0439 \\u0447\\u0430\\u0441\\u0442\\u0438.');
+}
+function prepareAmountInputs() {
+  for (const input of document.querySelectorAll(amountSelector)) {
+    const signed = input.matches(signedAmountSelector);
+    input.type = 'text'; input.inputMode = 'decimal';
+    input.pattern = amountPattern(signed);
+    input.value = groupAmount(input.value, signed);
+    validateAmountInput(input);
+  }
+}
+document.addEventListener('beforeinput', (event) => {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement) || !input.matches(amountSelector) || !event.inputType.startsWith('insert') || event.data === null) return;
+  if (!amountInsertionAllowed(input, event.data, input.matches(signedAmountSelector))) event.preventDefault();
+}, true);
+document.addEventListener('paste', (event) => {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement) || !input.matches(amountSelector)) return;
+  const pasted = event.clipboardData?.getData('text');
+  if (pasted !== undefined && !amountInsertionAllowed(input, pasted, input.matches(signedAmountSelector))) event.preventDefault();
+}, true);
+document.addEventListener('input', (event) => {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement) || !input.matches(amountSelector)) return;
+  const position = input.selectionStart ?? input.value.length;
+  const visibleCharactersBefore = input.value.slice(0, position).replaceAll(',', '').length;
+  const signed = input.matches(signedAmountSelector);
+  input.value = groupAmount(input.value, signed);
+  validateAmountInput(input);
+  let cursor = 0, count = 0;
+  while (cursor < input.value.length && count < visibleCharactersBefore) { if (input.value[cursor] !== ',') count++; cursor++; }
+  input.setSelectionRange(cursor, cursor);
+}, true);
+document.addEventListener('formdata', (event) => {
+  for (const input of event.target.querySelectorAll(amountSelector)) {
+    if (!input.disabled && event.formData.has(input.name)) event.formData.set(input.name, input.value.replaceAll(',', ''));
+  }
+}, true);
+prepareAmountInputs();
+
 function storedView() {
   const hashView = location.hash.slice(1);
   if (VIEWS.includes(hashView)) return hashView;
@@ -34,6 +96,8 @@ const state = {
   settings: null,
   view: storedView(),
   month: '',
+  includeOpeningBalances: false,
+  overviewDirection: 'expense',
   operationMonth: '',
   operationType: 'Все',
   operationSection: 'operations',
@@ -331,16 +395,21 @@ function pageHeader(title, subtitle, withMonth = false) {
 }
 
 function renderOverview() {
-  const operations = monthOperations();
+  const openingOperations = state.includeOpeningBalances ? (state.data.openingBalances || []).flatMap((item) => {
+    const account = accountById(item.accountId);
+    const rate = account?.currency === 'RUB' ? 1 : item.rate;
+    return rate > 0 ? [{ ...item, type: 'Доход', category: 'Начальный баланс', rubAmount: item.amount * rate, opening: true }] : [];
+  }) : [];
+  const operations = [...monthOperations(), ...openingOperations.filter((item) => item.date.startsWith(state.month))];
   const sum = totals(operations);
   const net = sum.income - sum.expense;
   const resultNote = sum.income ? `${Math.round((net / sum.income) * 100)}% от доходов` : sum.expense ? 'Нет доходов за период' : 'Нет операций за период';
   const categories = new Map();
-  operations.filter((item) => item.type === 'Расход' || item.type === 'Инвестиция').forEach((item) => categories.set(item.category || 'Без категории', (categories.get(item.category || 'Без категории') || 0) + item.rubAmount));
+  const isIncome = state.overviewDirection === 'income';
+  const categoryTotal = isIncome ? sum.income : sum.expense;
+  operations.filter((item) => isIncome ? item.type === 'Доход' : item.type === 'Расход' || item.type === 'Инвестиция').forEach((item) => categories.set(item.category || 'Без категории', (categories.get(item.category || 'Без категории') || 0) + item.rubAmount));
   const sortedCategories = [...categories.entries()].sort((a, b) => b[1] - a[1]);
-  const topCategories = sortedCategories.length > 6
-    ? [...sortedCategories.slice(0, 5), ['Остальные', sortedCategories.slice(5).reduce((sumValue, [, value]) => sumValue + value, 0)]]
-    : sortedCategories;
+  const topCategories = sortedCategories;
   const unclassified = Math.max(0, sum.expense - sum.required - sum.flexible - sum.investment);
   const months = [];
   const anchor = new Date(`${state.month}-01T12:00:00`);
@@ -348,12 +417,12 @@ function renderOverview() {
     const date = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1);
     const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
     const shortMonth = new Intl.DateTimeFormat(localeCode(), { month: 'short' }).format(date).replace('.', '');
-    months.push({ key, label: `${shortMonth} ${String(date.getFullYear()).slice(-2)}`, fullLabel: monthLabel(key), ...totals(monthOperations(key)) });
+    months.push({ key, label: `${shortMonth} ${String(date.getFullYear()).slice(-2)}`, fullLabel: monthLabel(key), ...totals([...monthOperations(key), ...openingOperations.filter((item) => item.date.startsWith(key))]) });
   }
   const chartMax = Math.max(...months.flatMap((item) => [item.income, item.expense]), 1);
-  const recent = operations.slice(0, 5);
+  const recent = monthOperations().slice(0, 5);
   const categoryRows = topCategories.map(([name, value]) => {
-    const share = sum.expense ? Math.round(value / sum.expense * 100) : 0;
+    const share = categoryTotal ? Math.round(value / categoryTotal * 100) : 0;
     return `<div class="category-row"><span class="category-name">${esc(name === 'Остальные' ? `📊 ${name}` : categoryLabel(name))} <small>${share}%</small></span><strong>${money(value)}</strong><div class="track"><i style="width:${share}%"></i></div></div>`;
   }).join('');
   const necessityRows = [
@@ -364,6 +433,8 @@ function renderOverview() {
   ].filter(([, value]) => value > 0);
 
   content.innerHTML = `${pageHeader(`Обзор за ${monthLabel(state.month)}`, 'Сводка по книге', true)}
+    <label class="overview-opening-toggle"><input id="overview-opening-toggle" type="checkbox" ${state.includeOpeningBalances ? 'checked' : ''}> Учитывать начальные балансы как доход</label>
+    ${state.includeOpeningBalances && (state.data.openingBalances || []).some((item) => accountById(item.accountId)?.currency !== 'RUB' && !(item.rate > 0)) ? '<p role="status">Начальные балансы без исторического курса не включены в доходы.</p>' : ''}
     <div class="dashboard-grid">
       <section class="overview-main">
     <div class="metrics">
@@ -376,8 +447,8 @@ function renderOverview() {
         <div class="chart">${months.map((item) => { const investmentShare = item.expense ? item.investment / item.expense : 0; const split = `${Math.max(0, 100 - investmentShare * 100)}%`; const expenseStyle = item.investment > 0 ? `background:linear-gradient(to top,var(--expense-series) ${split},var(--investment-series) ${split})` : ''; return `<div class="chart-group" tabindex="0" aria-label="${esc(`${item.fullLabel}: доход ${money(item.income)}, расход ${money(item.expense)}, включая инвестиции ${money(item.investment)}`)}" title="${esc(`${item.fullLabel}: доход ${money(item.income)}, расход ${money(item.expense)}, включая инвестиции ${money(item.investment)}`)}"><i class="bar" style="height:${item.income ? Math.max(2, item.income / chartMax * 175) : 0}px"></i><i class="bar expense" style="height:${item.expense ? Math.max(2, item.expense / chartMax * 175) : 0}px;${expenseStyle}"></i><span class="chart-label">${esc(item.label)}</span></div>`; }).join('')}</div>
       </article>
       </section>
-      <article class="card spending-card"><div class="card-head"><h2>Структура расходов</h2><span>${money(sum.expense)}</span></div>
-        ${sum.expense ? `<section class="necessity-summary" aria-label="Расходы по необходимости"><h3>По необходимости</h3><div class="necessity-track">${necessityRows.map(([label, value, className]) => `<i class="${className}" style="width:${value / sum.expense * 100}%" title="${esc(`${label}: ${money(value)}`)}"></i>`).join('')}</div><div class="necessity-legend">${necessityRows.map(([label, value, className]) => `<div><i class="${className}"></i><span>${esc(label)}<small>${money(value)} · ${Math.round(value / sum.expense * 100)}%</small></span></div>`).join('')}</div></section><div class="section-title"><h3>По категориям</h3><span>доля от всех расходов</span></div><div class="category-list">${categoryRows}</div>` : '<div class="empty-state">В этом месяце расходов пока нет</div>'}
+      <article class="card spending-card"><div class="card-head"><h2>${isIncome ? 'Структура доходов' : 'Структура расходов'}</h2><span>${money(categoryTotal)}</span></div><label>Показывать <select id="overview-direction"><option value="expense" ${!isIncome ? 'selected' : ''}>Расходы</option><option value="income" ${isIncome ? 'selected' : ''}>Доходы</option></select></label>
+        ${!isIncome && sum.expense ? `<section class="necessity-summary" aria-label="Расходы по необходимости"><h3>По необходимости</h3><div class="necessity-track">${necessityRows.map(([label, value, className]) => `<i class="${className}" style="width:${value / sum.expense * 100}%" title="${esc(`${label}: ${money(value)}`)}"></i>`).join('')}</div><div class="necessity-legend">${necessityRows.map(([label, value, className]) => `<div><i class="${className}"></i><span>${esc(label)}<small>${money(value)} · ${Math.round(value / sum.expense * 100)}%</small></span></div>`).join('')}</div></section>` : ''}<div class="section-title"><h3>По категориям</h3></div><div class="category-list">${categoryRows || '<div class="empty-state">В этом месяце операций пока нет</div>'}</div>
       </article>
       <article class="card recent-card"><div class="card-head"><h2>Последние операции за месяц</h2><button class="row-action" data-view="operations">Все операции →</button></div>${operationTable(recent, false)}</article>
     </div>`;
@@ -435,9 +506,10 @@ function operationTable(operations, actions = true, sortable = false) {
 
 function openingBalanceTable(rows) {
   if (!rows.length) return '';
-  return `<div class="table-wrap"><table><thead><tr><th>Дата</th><th>Счёт</th><th style="text-align:right">Начальный баланс</th><th style="text-align:right">Эквивалент в рублях</th><th></th></tr></thead><tbody>${rows.map((item) => {
+  return `<div class="table-wrap"><table><thead><tr><th>Дата</th><th>Счёт</th><th style="text-align:right">Начальный баланс</th><th style="text-align:right">Курс ЦБ, RUB за 1 ед.</th><th style="text-align:right">Эквивалент в рублях</th><th></th></tr></thead><tbody>${rows.map((item) => {
     const account = accountById(item.accountId);
-    return `<tr><td class="muted">${dateLabel(item.date)}</td><td>${esc(account?.name || '')}</td><td class="money">${money(item.amount, account?.currency || 'RUB')}</td><td class="money">${money(item.amount * (account?.rate || 1))}</td><td><button type="button" class="row-action" data-edit-opening="${item.accountId}" title="Изменить">✎</button></td></tr>`;
+    const rate = account?.currency === 'RUB' ? 1 : item.rate;
+    return `<tr><td class="muted">${dateLabel(item.date)}</td><td>${esc(account?.name || '')}</td><td class="money">${money(item.amount, account?.currency || 'RUB')}</td><td class="money">${rate > 0 ? number(rate, 6) : 'Нет курса'}</td><td class="money">${rate > 0 ? money(item.amount * rate) : 'Нет исторического курса'}</td><td><button type="button" class="row-action" data-edit-opening="${item.accountId}" title="Изменить">✎</button></td></tr>`;
   }).join('')}</tbody></table></div>`;
 }
 
@@ -449,6 +521,7 @@ function renderOpeningBalances() {
   content.innerHTML = `${pageHeader('Операции', `${state.data.operations.length} записей в Excel`)}
     <div class="operation-sections" role="tablist" aria-label="Разделы операций"><button type="button" role="tab" aria-selected="false" data-operations-section="operations">Операции</button><button type="button" role="tab" aria-selected="true" class="active" data-operations-section="opening-balances">Начальные балансы</button></div>
     <form class="opening-balance-card" id="opening-balance-form"><div class="opening-balance-heading"><strong>Начальный баланс</strong><span>Повторный ввод заменит прежнюю сумму. В доходы и расходы она не входит.</span></div><div class="opening-balance-fields"><label><span>Счёт</span><select name="accountId">${accounts().map((account) => `<option value="${account.id}">${esc(account.name)} · ${esc(account.currency)}</option>`).join('')}</select></label><label><span>Сумма в валюте счёта</span><input name="amount" type="number" min="0" step="any" placeholder="0" required></label><button type="submit" class="primary-button">Сохранить</button></div></form>
+    <button type="button" class="secondary-button" data-repair-opening-rates>Заполнить исторические курсы начальных балансов</button>
     <section class="table-card opening-balance-table">${rows.length ? openingBalanceTable(rows) : '<div class="empty-state">Начальные балансы пока не заданы.</div>'}</section>`;
 }
 
@@ -461,7 +534,7 @@ function mountOpeningDateField() {
 function renderOperations() {
   if (state.operationSection === 'opening-balances') { renderOpeningBalances(); mountOpeningDateField(); return; }
   const allRows = state.data.operations;
-  const filtered = allRows.filter((item) => {
+  const matchingRows = allRows.filter((item) => {
     const matchesMonth = !state.operationMonth || item.date.startsWith(state.operationMonth);
     const matchesType = state.operationType === 'Все' || item.type === state.operationType;
     const matchesFrom = !state.dateFrom || item.date >= state.dateFrom;
@@ -471,8 +544,10 @@ function renderOperations() {
     const matchesAccount = !selectedAccount || item.accountId === selectedAccount || item.destinationAccountId === selectedAccount || item.savingsAccountId === selectedAccount;
     const matchesNecessity = !state.operationNecessity || item.necessity === state.operationNecessity;
     const haystack = `${item.category} ${item.notes} ${item.type} ${item.necessity} ${accountById(item.accountId)?.name || ''} ${accountById(item.destinationAccountId)?.name || ''}`.toLowerCase();
-    return matchesMonth && matchesFrom && matchesTo && matchesType && matchesCategory && matchesAccount && matchesNecessity && haystack.includes(state.search.toLowerCase());
+    return matchesMonth && matchesFrom && matchesTo && matchesType && matchesAccount && matchesNecessity && haystack.includes(state.search.toLowerCase());
   });
+  const usedCategories = new Set(matchingRows.map((item) => item.category));
+  const filtered = matchingRows.filter((item) => !state.operationCategory || item.category === state.operationCategory);
   const sortValue = (item) => {
     if (state.operationSort === 'date') return item.date || '';
     if (state.operationSort === 'amount') return Number(item.rubAmount) || 0;
@@ -516,7 +591,7 @@ function renderOperations() {
       <label class="filter-field"><span>С даты</span><input id="operation-date-from" type="date" value="${state.dateFrom}"></label>
       <label class="filter-field"><span>По дату</span><input id="operation-date-to" type="date" value="${state.dateTo}"></label>
       <label class="filter-field"><span>Тип</span><select id="operation-type"><option value="Все">${translate('Все типы')}</option>${['Расход', 'Доход', 'Перевод', 'Инвестиция'].map((type) => `<option value="${type}" ${state.operationType === type ? 'selected' : ''}>${typeLabel(type)}</option>`).join('')}</select></label>
-      <label class="filter-field"><span>Категория</span><select id="operation-category"><option value="">Все категории</option>${categories.map((item) => `<option value="${esc(item.name)}" ${state.operationCategory === item.name ? 'selected' : ''}>${esc(item.emoji ? `${item.emoji} ${item.name}` : item.name)}</option>`).join('')}</select></label>
+      <label class="filter-field"><span>Категория</span><select id="operation-category"><option value="">Все категории</option>${[true, false].map((used) => `<optgroup label="${used ? 'Есть операции за выбранный период' : 'Нет операций за выбранный период'}">${categories.filter((item) => usedCategories.has(item.name) === used).map((item) => `<option value="${esc(item.name)}" ${state.operationCategory === item.name ? 'selected' : ''}>${esc(item.emoji ? `${item.emoji} ${item.name}` : item.name)}</option>`).join('')}</optgroup>`).join('')}</select></label>
       <label class="filter-field"><span>Счёт</span><select id="operation-account"><option value="">Все счета</option>${accounts().map((item) => `<option value="${item.id}" ${String(item.id) === state.operationAccount ? 'selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>
       <label class="filter-field"><span>Необходимость</span><select id="operation-necessity"><option value="">Любая</option>${state.data.lists.necessities.map((item) => `<option value="${esc(item)}" ${state.operationNecessity === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></label>
       <button type="button" class="secondary-button clear-operation-filters" id="clear-operation-filters" ${activeFilters ? '' : 'disabled'}>Сбросить фильтры</button>
@@ -559,6 +634,12 @@ function renderBalance() {
       ${allAccounts.map((item) => accountRowHtml(item)).join('')}
     </tbody></table></div><div class="balance-actions"><p>Добавление, изменение и удаление сразу обновляют список счетов для Obsidian через Syncthing. Перед каждой записью создаётся бэкап.</p><div><button class="secondary-button" type="button" data-add-account>+ Добавить счёт</button><button class="primary-button" type="submit">Сохранить изменения</button></div></div></form>`;
   content.querySelectorAll('[data-account-row]').forEach((row) => {
+    const accountId = Number(row.dataset.accountRow);
+    const currency = row.querySelector('[name="currency"]');
+    if (accountId && (state.data.openingBalances || []).some((item) => item.accountId === accountId)) {
+      currency.disabled = true;
+      currency.title = 'Валюта заблокирована, потому что у счёта сохранён начальный баланс.';
+    }
     prepareAccountRow(row);
   });
   const comparison = document.createElement('section');
@@ -726,6 +807,7 @@ async function updateAccountRate(row) {
   } catch (error) {
     if (currencySelect.value !== currency) return;
     rateInput.setCustomValidity(error.message);
+    tell(`Курс ЦБ для ${currency} на сегодняшнюю дату недоступен. Валютный счёт с начальным балансом 0 нельзя сохранить без курса. ${error.message}`);
     notify(error.message, 'error');
   } finally {
     if (currencySelect.value === currency) {
@@ -923,6 +1005,7 @@ function render() {
   });
   renderUpdateIndicator();
   ({ overview: renderOverview, operations: renderOperations, balance: renderBalance, savings: renderSavings, lists: renderLists, phone: renderPhoneSetup, settings: renderSettings }[state.view] || renderOverview)();
+  prepareAmountInputs();
 }
 
 function updateTopbarActions() {
@@ -1029,6 +1112,7 @@ function openOperation(operation = null) {
   operationForm.querySelector('.type-switch').hidden = Boolean(operation);
   document.querySelector('#dialog-title').textContent = operation ? `Редактирование: ${operation.type}${operation.savingsTransfer === 'from-savings' ? ' из накоплений' : ''}` : 'Новая операция';
   syncOperationAccountCurrency(!operation);
+  prepareAmountInputs();
   dialog.showModal();
 }
 
@@ -1063,6 +1147,16 @@ async function updateRateUi(fetchRate = true) {
 }
 
 document.addEventListener('click', async (event) => {
+  const repairOpening = event.target.closest('[data-repair-opening-rates]');
+  if (repairOpening) {
+    repairOpening.disabled = true;
+    try {
+      const result = await request('/api/operations/opening-balance/repair-rates', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      state.data = result.data; render();
+      tell(`Заполнено курсов: ${result.result.repaired}. Без доступного курса: ${result.result.unavailable.length}.`);
+    } catch (error) { tell(error.message); repairOpening.disabled = false; }
+    return;
+  }
   const savingsHistoryButton = event.target.closest('[data-savings-history]');
   if (savingsHistoryButton) {
     const account = (state.data?.savingsAccounts || []).find((item) => item.id === Number(savingsHistoryButton.dataset.savingsHistory));
@@ -1201,6 +1295,22 @@ document.addEventListener('click', async (event) => {
     if (!ask(`Установить Finance ${version}? Приложение закроется на время установки и запустится снова после неё. Книга, настройки и очередь синхронизации хранятся отдельно от версии приложения.`)) return;
     installUpdateButton.disabled = true;
     installUpdateButton.textContent = 'Загружаю и проверяю…';
+    const progressElement = document.createElement('progress');
+    progressElement.max = 100;
+    progressElement.setAttribute('aria-label', 'Загрузка установщика');
+    installUpdateButton.insertAdjacentElement('afterend', progressElement);
+    let progressBusy = false;
+    const progressTimer = setInterval(async () => {
+      if (progressBusy) return;
+      progressBusy = true;
+      try {
+        const progress = await request('/api/updates/progress');
+        progressElement.hidden = progress.stage !== 'downloading';
+        if (progress.total) progressElement.value = Math.min(99, Math.floor(progress.received / progress.total * 100));
+        else progressElement.removeAttribute('value');
+        installUpdateButton.textContent = progress.stage === 'verifying' ? 'Проверка установщика…' : progress.stage === 'launching' ? 'Запуск установщика…' : progress.stage === 'error' ? 'Ошибка загрузки' : progress.total ? `Загрузка: ${Math.min(99, Math.floor(progress.received / progress.total * 100))}%` : 'Загрузка…';
+      } catch {} finally { progressBusy = false; }
+    }, 500);
     try {
       await request('/api/updates/install', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version }) });
       state.updateInstallQueued = true;
@@ -1210,7 +1320,7 @@ document.addEventListener('click', async (event) => {
       notify(error.message, 'error');
       state.updateCheckError = error.message;
       renderSettings();
-    }
+    } finally { clearInterval(progressTimer); }
     return;
   }
   const rollbackButton = event.target.closest('[data-rollback-version]');
@@ -1415,6 +1525,8 @@ document.addEventListener('change', (event) => {
 document.querySelector('#mobile-menu').addEventListener('click', () => document.querySelector('.sidebar').classList.toggle('open'));
 
 content.addEventListener('change', async (event) => {
+  if (event.target.id === 'overview-opening-toggle') { state.includeOpeningBalances = event.target.checked; renderOverview(); return; }
+  if (event.target.id === 'overview-direction') { state.overviewDirection = event.target.value; renderOverview(); return; }
   const accountRow = event.target.closest?.('[data-account-row]');
   if (accountRow && event.target.matches('[name="currency"]')) await updateAccountRate(accountRow);
   const currencyList = event.target.closest?.('[data-reference-list="currencies"]');
@@ -1494,7 +1606,7 @@ content.addEventListener('submit', async (event) => {
     try {
       const result = await request('/api/operations/opening-balance', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.fromEntries(new FormData(form))) });
       state.data = result.data; render(); notify('Начальный баланс счёта сохранён и заменил прежнее значение.');
-    } catch (error) { notify(error.message, 'error'); button.disabled = false; }
+    } catch (error) { tell(`Начальный баланс не сохранён. ${error.message}`); button.disabled = false; }
     return;
   }
   if (event.target.id === 'savings-create-form') {
@@ -1553,7 +1665,10 @@ content.addEventListener('submit', async (event) => {
     state.data = result.data; render();
     const syncNote = result.mobileLists?.warning ? ` Syncthing: ${result.mobileLists.warning}` : ' Список счетов Obsidian обновлён.';
     notify(`Счета сохранены. Бэкап: ${result.backup}.${syncNote}`);
-  } catch (error) { notify(error.message, 'error'); button.disabled = false; button.textContent = 'Сохранить изменения'; }
+  } catch (error) {
+    if (error.code === 'EXTERNAL_SERVICE') tell('Не удалось создать валютный счет: курс ЦБ на дату создания недоступен. Нулевая запись начального баланса не сохранена, счет не создан. Попробуйте позже.');
+    notify(error.message, 'error'); button.disabled = false; button.textContent = 'Сохранить изменения';
+  }
 });
 
 content.addEventListener('input', (event) => {

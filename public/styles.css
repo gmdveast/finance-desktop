@@ -348,7 +348,7 @@ input[name="destinationAmount"][readonly], #investment-category-label[readonly] 
 .setting-row strong { overflow-wrap: anywhere; font-weight: 700; }
 .settings-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding-top: 18px; }
 .settings-card .settings-actions { grid-auto-rows: minmax(44px, auto); align-items: stretch; margin-top: auto; }
-.settings-card .settings-actions > :is(button, a) { display: flex; align-items: center; justify-content: center; width: 100%; min-width: 0; min-height: 44px; padding: 9px 12px; line-height: 1.25; text-align: center; }
+.settings-card .settings-actions > :is(button, a) { display: flex; align-items: center; justify-content: center; box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: 9px 12px; font-size: 12px; line-height: 1.25; text-align: center; }
 .settings-card .settings-actions > :only-child { grid-column: 1 / -1; }
 .settings-grid .settings-card:first-child [data-open-restore] { grid-column: 2; }
 .settings-actions-wrap { align-items: stretch; }
@@ -419,6 +419,10 @@ input[name="destinationAmount"][readonly], #investment-category-label[readonly] 
 .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
 .toast-stack { position: fixed; right: 24px; bottom: 24px; z-index: 100; display: flex; flex-direction: column; gap: 10px; width: min(420px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; pointer-events: none; }
 .toast { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: start; gap: 12px; box-sizing: border-box; width: 100%; max-width: 420px; padding: 14px 14px 14px 18px; border-radius: 12px; background: var(--forest); color: white; box-shadow: var(--shadow); font-size: 12px; opacity: 0; transform: translateY(12px); transition: opacity .22s ease, transform .22s ease; pointer-events: auto; }
+.toast-stack { scrollbar-width: none; }
+.spending-card .category-list { max-height: 420px; overflow-y: auto; }
+.overview-opening-toggle { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; }
+.toast-stack::-webkit-scrollbar { display: none; }
 .toast.show { transform: translateY(0); opacity: 1; }
 .toast.dismissed { transform: translateY(8px); opacity: 0; }
 .toast.error { background: #9e3d30; }
