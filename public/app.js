@@ -40,7 +40,7 @@ function groupAmount(value, signed = false) {
 function validateAmountInput(input) {
   const signed = input.matches(signedAmountSelector);
   const valid = !input.value || new RegExp(`^(?:${amountPattern(signed)})$`).test(input.value);
-  input.setCustomValidity(valid ? '' : '\\u0412\\u0432\\u043e\\u0434\\u0438\\u0442\\u0435 \\u0441\\u0443\\u043c\\u043c\\u0443 \\u0447\\u0438\\u0441\\u043b\\u043e\\u043c: \\u0446\\u0438\\u0444\\u0440\\u044b, \\u0437\\u0430\\u043f\\u044f\\u0442\\u044b\\u0435 \\u0438 \\u0442\\u043e\\u0447\\u043a\\u0430 \\u0434\\u043b\\u044f \\u0434\\u0440\\u043e\\u0431\\u043d\\u043e\\u0439 \\u0447\\u0430\\u0441\\u0442\\u0438.');
+  input.setCustomValidity(valid ? '' : translate('Введите сумму числом: цифры, запятые и точка для дробной части.'));
 }
 function prepareAmountInputs() {
   for (const input of document.querySelectorAll(amountSelector)) {
@@ -264,17 +264,26 @@ function rememberUpdateNotice(version) {
 
 function renderUpdateIndicator() {
   const button = document.querySelector('.nav-item[data-view="settings"]');
-  if (!button) return;
+  const notice = document.querySelector('#topbar-update-notice');
+  if (!button || !notice) return;
   if (!state.updateNoticeVersion) {
     button.removeAttribute('data-update-available');
     button.removeAttribute('aria-label');
     button.removeAttribute('title');
+    notice.hidden = true;
+    notice.removeAttribute('aria-label');
+    notice.removeAttribute('title');
     return;
   }
   button.setAttribute('data-update-available', 'true');
   button.setAttribute('aria-label', `Настройки. Доступно обновление Finance ${state.updateNoticeVersion}`);
   button.setAttribute('title', `Доступно обновление Finance ${state.updateNoticeVersion}`);
+  notice.querySelector('.update-notice-version').textContent = state.updateNoticeVersion;
+  notice.hidden = false;
+  notice.setAttribute('aria-label', `Доступно обновление Finance ${state.updateNoticeVersion}. Открыть настройки обновления.`);
+  notice.setAttribute('title', `Доступно обновление Finance ${state.updateNoticeVersion}. Открыть настройки обновления.`);
   applyTranslations(button);
+  applyTranslations(notice);
 }
 
 async function checkForUpdates({ manual = false } = {}) {
@@ -444,11 +453,22 @@ function renderOverview() {
       <article class="metric" data-overview-metric="balance"><span class="metric-label">Текущий остаток</span><strong class="metric-value">${money(accounts().reduce((a, b) => a + b.rubAmount, 0))}</strong><span class="metric-note">Расчётно по всем активным счетам</span></article>
     </div>
       <article class="card overview-chart-card"><div class="card-head"><h2>Динамика за 6 месяцев</h2><div class="legend"><span><i class="income"></i>Доход</span><span><i class="expense"></i>Расход</span><span><i class="investment"></i>Инвестиции в расходах</span></div></div>
-        <div class="chart">${months.map((item) => { const investmentShare = item.expense ? item.investment / item.expense : 0; const split = `${Math.max(0, 100 - investmentShare * 100)}%`; const expenseStyle = item.investment > 0 ? `background:linear-gradient(to top,var(--expense-series) ${split},var(--investment-series) ${split})` : ''; return `<div class="chart-group" tabindex="0" aria-label="${esc(`${item.fullLabel}: доход ${money(item.income)}, расход ${money(item.expense)}, включая инвестиции ${money(item.investment)}`)}" title="${esc(`${item.fullLabel}: доход ${money(item.income)}, расход ${money(item.expense)}, включая инвестиции ${money(item.investment)}`)}"><i class="bar" style="height:${item.income ? Math.max(2, item.income / chartMax * 175) : 0}px"></i><i class="bar expense" style="height:${item.expense ? Math.max(2, item.expense / chartMax * 175) : 0}px;${expenseStyle}"></i><span class="chart-label">${esc(item.label)}</span></div>`; }).join('')}</div>
+        <div class="chart">${months.map((item) => {
+          const investmentShare = item.expense ? item.investment / item.expense : 0;
+          const split = `${Math.max(0, 100 - investmentShare * 100)}%`;
+          const expenseStyle = item.investment > 0 ? `background:linear-gradient(to top,var(--expense-series) ${split},var(--investment-series) ${split})` : '';
+          const accessibleLabel = translate('{month}: доход {income}, расход {expense}, включая инвестиции {investment}', {
+            month: item.fullLabel,
+            income: money(item.income),
+            expense: money(item.expense),
+            investment: money(item.investment),
+          });
+          return `<div class="chart-group" tabindex="0" aria-label="${esc(accessibleLabel)}" title="${esc(accessibleLabel)}"><i class="bar" style="height:${item.income ? Math.max(2, item.income / chartMax * 175) : 0}px"></i><i class="bar expense" style="height:${item.expense ? Math.max(2, item.expense / chartMax * 175) : 0}px;${expenseStyle}"></i><span class="chart-label">${esc(item.label)}</span></div>`;
+        }).join('')}</div>
       </article>
       </section>
-      <article class="card spending-card"><div class="card-head"><h2>${isIncome ? 'Структура доходов' : 'Структура расходов'}</h2><span>${money(categoryTotal)}</span></div><label>Показывать <select id="overview-direction"><option value="expense" ${!isIncome ? 'selected' : ''}>Расходы</option><option value="income" ${isIncome ? 'selected' : ''}>Доходы</option></select></label>
-        ${!isIncome && sum.expense ? `<section class="necessity-summary" aria-label="Расходы по необходимости"><h3>По необходимости</h3><div class="necessity-track">${necessityRows.map(([label, value, className]) => `<i class="${className}" style="width:${value / sum.expense * 100}%" title="${esc(`${label}: ${money(value)}`)}"></i>`).join('')}</div><div class="necessity-legend">${necessityRows.map(([label, value, className]) => `<div><i class="${className}"></i><span>${esc(label)}<small>${money(value)} · ${Math.round(value / sum.expense * 100)}%</small></span></div>`).join('')}</div></section>` : ''}<div class="section-title"><h3>По категориям</h3></div><div class="category-list">${categoryRows || '<div class="empty-state">В этом месяце операций пока нет</div>'}</div>
+      <article class="card spending-card"><div class="card-head"><h2>${isIncome ? 'Структура доходов' : 'Структура расходов'}</h2><span>${money(categoryTotal)}</span></div><label><span>${translate('Показывать')}</span><select id="overview-direction"><option value="expense" ${!isIncome ? 'selected' : ''}>${translate('Расходы')}</option><option value="income" ${isIncome ? 'selected' : ''}>${translate('Доходы')}</option></select></label>
+        ${!isIncome && sum.expense ? `<section class="necessity-summary" aria-label="Расходы по необходимости"><h3>По необходимости</h3><div class="necessity-track">${necessityRows.map(([label, value, className]) => `<i class="${className}" style="width:${value / sum.expense * 100}%" title="${esc(`${label}: ${money(value)}`)}"></i>`).join('')}</div><div class="necessity-legend">${necessityRows.map(([label, value, className]) => `<div><i class="${className}"></i><span>${esc(label)}<small>${money(value)} · ${Math.round(value / sum.expense * 100)}%</small></span></div>`).join('')}</div></section>` : ''}<div class="section-title"><h3>По категориям</h3></div><div class="category-list" role="region" tabindex="0" aria-label="Список категорий">${categoryRows || '<div class="empty-state">В этом месяце операций пока нет</div>'}</div>
       </article>
       <article class="card recent-card"><div class="card-head"><h2>Последние операции за месяц</h2><button class="row-action" data-view="operations">Все операции →</button></div>${operationTable(recent, false)}</article>
     </div>`;
@@ -520,7 +540,7 @@ function renderOpeningBalances() {
     .sort((a, b) => (accountOrder.get(a.accountId) ?? Infinity) - (accountOrder.get(b.accountId) ?? Infinity));
   content.innerHTML = `${pageHeader('Операции', `${state.data.operations.length} записей в Excel`)}
     <div class="operation-sections" role="tablist" aria-label="Разделы операций"><button type="button" role="tab" aria-selected="false" data-operations-section="operations">Операции</button><button type="button" role="tab" aria-selected="true" class="active" data-operations-section="opening-balances">Начальные балансы</button></div>
-    <form class="opening-balance-card" id="opening-balance-form"><div class="opening-balance-heading"><strong>Начальный баланс</strong><span>Повторный ввод заменит прежнюю сумму. В доходы и расходы она не входит.</span></div><div class="opening-balance-fields"><label><span>Счёт</span><select name="accountId">${accounts().map((account) => `<option value="${account.id}">${esc(account.name)} · ${esc(account.currency)}</option>`).join('')}</select></label><label><span>Сумма в валюте счёта</span><input name="amount" type="number" min="0" step="any" placeholder="0" required></label><button type="submit" class="primary-button">Сохранить</button></div></form>
+    <form class="opening-balance-card" id="opening-balance-form"><div class="opening-balance-heading"><strong>Начальный баланс</strong><span>Повторный ввод заменит прежнюю сумму. В доходы и расходы она не входит.</span></div><div class="opening-balance-fields"><label><span>Счёт</span><select name="accountId">${accounts().map((account) => `<option data-locale-preserve value="${account.id}">${esc(account.name)} · ${esc(account.currency)}</option>`).join('')}</select></label><label><span>Сумма в валюте счёта</span><input name="amount" type="number" min="0" step="any" placeholder="0" required></label><button type="submit" class="primary-button">Сохранить</button></div></form>
     <button type="button" class="secondary-button" data-repair-opening-rates>Заполнить исторические курсы начальных балансов</button>
     <section class="table-card opening-balance-table">${rows.length ? openingBalanceTable(rows) : '<div class="empty-state">Начальные балансы пока не заданы.</div>'}</section>`;
 }
@@ -591,9 +611,9 @@ function renderOperations() {
       <label class="filter-field"><span>С даты</span><input id="operation-date-from" type="date" value="${state.dateFrom}"></label>
       <label class="filter-field"><span>По дату</span><input id="operation-date-to" type="date" value="${state.dateTo}"></label>
       <label class="filter-field"><span>Тип</span><select id="operation-type"><option value="Все">${translate('Все типы')}</option>${['Расход', 'Доход', 'Перевод', 'Инвестиция'].map((type) => `<option value="${type}" ${state.operationType === type ? 'selected' : ''}>${typeLabel(type)}</option>`).join('')}</select></label>
-      <label class="filter-field"><span>Категория</span><select id="operation-category"><option value="">Все категории</option>${[true, false].map((used) => `<optgroup label="${used ? 'Есть операции за выбранный период' : 'Нет операций за выбранный период'}">${categories.filter((item) => usedCategories.has(item.name) === used).map((item) => `<option value="${esc(item.name)}" ${state.operationCategory === item.name ? 'selected' : ''}>${esc(item.emoji ? `${item.emoji} ${item.name}` : item.name)}</option>`).join('')}</optgroup>`).join('')}</select></label>
-      <label class="filter-field"><span>Счёт</span><select id="operation-account"><option value="">Все счета</option>${accounts().map((item) => `<option value="${item.id}" ${String(item.id) === state.operationAccount ? 'selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>
-      <label class="filter-field"><span>Необходимость</span><select id="operation-necessity"><option value="">Любая</option>${state.data.lists.necessities.map((item) => `<option value="${esc(item)}" ${state.operationNecessity === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></label>
+      <label class="filter-field"><span>Категория</span><select id="operation-category"><option value="">${translate('Все категории')}</option>${[true, false].map((used) => `<optgroup label="${used ? 'Есть операции за выбранный период' : 'Нет операций за выбранный период'}">${categories.filter((item) => usedCategories.has(item.name) === used).map((item) => `<option data-locale-preserve value="${esc(item.name)}" ${state.operationCategory === item.name ? 'selected' : ''}>${esc(item.emoji ? `${item.emoji} ${item.name}` : item.name)}</option>`).join('')}</optgroup>`).join('')}</select></label>
+      <label class="filter-field"><span>Счёт</span><select id="operation-account"><option value="">${translate('Все счета')}</option>${accounts().map((item) => `<option data-locale-preserve value="${item.id}" ${String(item.id) === state.operationAccount ? 'selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>
+      <label class="filter-field"><span>Необходимость</span><select id="operation-necessity"><option value="">${translate('Любая')}</option>${state.data.lists.necessities.map((item) => `<option data-locale-preserve value="${esc(item)}" ${state.operationNecessity === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></label>
       <button type="button" class="secondary-button clear-operation-filters" id="clear-operation-filters" ${activeFilters ? '' : 'disabled'}>Сбросить фильтры</button>
     </div><div class="operation-filter-meta"><span>Показано ${filtered.length} из ${allRows.length}</span><span>Сумма в рублях: ${filteredRubTotal === null ? 'нет курса для части операций' : money(filteredRubTotal)}</span></div></div>
     <div class="table-card">${operationTable(filtered, true, true)}</div>`;
@@ -607,7 +627,7 @@ function accountRowHtml(item = {}) {
   const isNew = !item.id;
   const canDelete = accounts().length > 1;
   const currency = item.currency || 'RUB';
-  return `<tr data-account-row="${item.id || ''}" class="${isNew ? 'new-account-row' : ''}"><td class="account-name-cell"><input name="name" value="${esc(item.name)}" title="${esc(item.name)}" placeholder="Название счёта" required></td><td class="account-currency-cell"><select name="currency" required>${state.data.lists.currencies.map((value) => `<option ${value === currency ? 'selected' : ''}>${esc(value)}</option>`).join('')}</select></td><td class="account-rate-cell"><input name="rate" type="number" min="0.000001" step="any" value="${currency === 'RUB' ? '1' : item.rate || ''}" placeholder="${currency === 'RUB' ? '1' : 'Курс ЦБ на сегодня'}" ${currency === 'RUB' ? 'readonly' : ''}></td><td class="money account-balance-cell" data-account-calculated>${number(item.calculatedBalance)} ${esc(currency)}</td><td class="money account-rub-cell">${item.rubAmount === null ? '—' : money(item.rubAmount)}</td><td class="account-actions-cell"><div class="account-row-actions">${isNew ? '<button type="button" class="row-action" data-remove-new-account title="Убрать">×</button>' : `<button type="button" class="row-action danger" data-delete-account="${item.id}" title="${canDelete ? 'Удалить счёт' : 'Нельзя удалить единственный счёт'}" ${canDelete ? '' : 'disabled'}>×</button>`}</div></td></tr>`;
+  return `<tr data-account-row="${item.id || ''}" class="${isNew ? 'new-account-row' : ''}"><td class="account-name-cell"><input name="name" value="${esc(item.name)}" title="${esc(item.name)}" placeholder="Название счёта" required></td><td class="account-currency-cell"><select name="currency" required>${state.data.lists.currencies.map((value) => `<option data-locale-preserve ${value === currency ? 'selected' : ''}>${esc(value)}</option>`).join('')}</select></td><td class="account-rate-cell"><input name="rate" type="number" min="0.000001" step="any" value="${currency === 'RUB' ? '1' : item.rate || ''}" placeholder="${currency === 'RUB' ? '1' : 'Курс ЦБ на сегодня'}" ${currency === 'RUB' ? 'readonly' : ''}></td><td class="money account-balance-cell" data-account-calculated>${number(item.calculatedBalance)} ${esc(currency)}</td><td class="money account-rub-cell">${item.rubAmount === null ? '—' : money(item.rubAmount)}</td><td class="account-actions-cell"><div class="account-row-actions">${isNew ? '<button type="button" class="row-action" data-remove-new-account title="Убрать">×</button>' : `<button type="button" class="row-action danger" data-delete-account="${item.id}" title="${canDelete ? 'Удалить счёт' : 'Нельзя удалить единственный счёт'}" ${canDelete ? '' : 'disabled'}>×</button>`}</div></td></tr>`;
 }
 
 function prepareAccountRow(row) {
@@ -683,8 +703,17 @@ async function loadCurrencyComparison(container, ledger = 'main', refresh = fals
     if (snapshot !== state.data) return;
     if (!container.isConnected) return;
     const signed = (value) => `${value > 0 ? '+' : ''}${money(value)}`;
-    container.innerHTML = `<h2>Изменение стоимости текущего остатка</h2><p>Сравнение одной и той же суммы по курсам ЦБ на ${dateLabel(data.firstDay)} и ${dateLabel(data.today)}. Это не доход или расход за месяц.</p><div class="table-wrap"><table><thead><tr><th>Валюта</th><th>Остаток</th><th>Курс на 1-е число</th><th>Курс сегодня</th><th>На 1-е число, ₽</th><th>Сегодня, ₽</th><th>Разница, ₽</th></tr></thead><tbody>${data.currencies.map((item) => `<tr><td>${esc(item.currency)}</td><td>${number(item.amount)}</td>${item.error ? `<td colspan="5">${esc(item.error)}</td>` : `<td title="Курс ЦБ от ${esc(item.firstEffectiveDate)}">${number(item.firstRate, 6)}</td><td title="Курс ЦБ от ${esc(item.currentEffectiveDate)}">${number(item.currentRate, 6)}</td><td>${money(item.firstValue)}</td><td>${money(item.currentValue)}</td><td>${signed(item.difference)}</td>`}</tr>`).join('')}</tbody><tfoot><tr><th colspan="4">Итого по всем счетам</th><td>${data.total ? money(data.total.firstValue) : '—'}</td><td>${data.total ? money(data.total.currentValue) : '—'}</td><td>${data.total ? signed(data.total.difference) : 'Нет всех курсов'}</td></tr></tfoot></table></div>${data.currencies.length ? '' : '<p>Добавьте первый счёт, чтобы сравнивать стоимость остатка.</p>'}`;
-  } catch (error) { if (container.isConnected) container.innerHTML = `<h2>Изменение стоимости текущего остатка</h2><p>${esc(error.message)}</p><button type="button" class="secondary-button" data-retry-comparison>Повторить</button>`; }
+    const description = translate('Сравнение одной и той же суммы по курсам ЦБ на {firstDay} и {today}. Это не доход или расход за месяц.', {
+      firstDay: dateLabel(data.firstDay), today: dateLabel(data.today),
+    });
+    container.innerHTML = `<h2>Изменение стоимости текущего остатка</h2><p>${esc(description)}</p><div class="table-wrap"><table><thead><tr><th>Валюта</th><th>Остаток</th><th>Курс на 1-е число</th><th>Курс сегодня</th><th>На 1-е число, ₽</th><th>Сегодня, ₽</th><th>Разница, ₽</th></tr></thead><tbody>${data.currencies.map((item) => `<tr><td>${esc(item.currency)}</td><td>${number(item.amount)}</td>${item.error ? `<td colspan="5">${esc(item.error)}</td>` : `<td title="Курс ЦБ от ${esc(item.firstEffectiveDate)}">${number(item.firstRate, 6)}</td><td title="Курс ЦБ от ${esc(item.currentEffectiveDate)}">${number(item.currentRate, 6)}</td><td>${money(item.firstValue)}</td><td>${money(item.currentValue)}</td><td>${signed(item.difference)}</td>`}</tr>`).join('')}</tbody><tfoot><tr><th colspan="4">Итого по всем счетам</th><td>${data.total ? money(data.total.firstValue) : '—'}</td><td>${data.total ? money(data.total.currentValue) : '—'}</td><td>${data.total ? signed(data.total.difference) : 'Нет всех курсов'}</td></tr></tfoot></table></div>${data.currencies.length ? '' : '<p>Добавьте первый счёт, чтобы сравнивать стоимость остатка.</p>'}`;
+    applyTranslations(container);
+  } catch (error) {
+    if (container.isConnected) {
+      container.innerHTML = `<h2>Изменение стоимости текущего остатка</h2><p>${esc(error.message)}</p><button type="button" class="secondary-button" data-retry-comparison>Повторить</button>`;
+      applyTranslations(container);
+    }
+  }
 }
 
 function renderSavings() {
@@ -702,8 +731,8 @@ function renderSavings() {
     <div class="balance-hero savings-hero"><div class="balance-hero-main"><div><small>Общий баланс накоплений</small><strong data-rub-total>${totalRub === null ? '—' : money(totalRub)}</strong></div><div class="balance-hero-equivalents"><small>Эквивалент в USD</small><div class="currency-equivalent-list" data-total-currency-equivalents>${totalRub === null ? '<span class="currency-equivalent">— USD</span>' : cachedUsdEquivalent(totalRub)}</div></div></div><span class="balance-account-count">${savings.length} активных счетов</span></div>
     <div class="metrics savings-metrics"><article class="metric"><span>Отложенные</span><strong class="savings-metric-values">${esc(groupBalance('Отложенные'))}</strong><small>остатки по валютам</small></article><article class="metric"><span>Вклады</span><strong class="savings-metric-values">${esc(groupBalance('Вклад'))}</strong><small>остатки по валютам</small></article><article class="metric savings-rub-total"><span>Итого сегодня</span><strong data-rub-total>${totalRub === null ? '—' : money(totalRub)}</strong><small>рублёвый эквивалент</small></article></div>
     <section class="card savings-accounts"><div class="section-title"><h3>Счета накоплений</h3><span>Начальный капитал + движения</span></div>${savings.length ? `<div class="savings-card-grid">${savings.map((item) => `<article class="savings-account-card" data-savings-account="${item.id}"><div class="savings-account-head"><div><span class="tag">${esc(item.type)}</span><h3 class="account-name">${esc(item.name)}</h3></div><button class="row-action danger" type="button" data-delete-savings="${item.id}" title="Удалить счёт">×</button></div><strong class="savings-balance">${money(item.calculatedBalance, item.currency)}</strong><small>Начальный капитал: ${money(item.initialCapital, item.currency)}</small><form class="savings-increase-form" data-savings-increase="${item.id}"><label class="field"><span>Изменить капитал · ${esc(item.currency)}</span><input name="amount" type="number" step="0.01" inputmode="decimal" required placeholder="Можно ввести отрицательную"></label><label class="field"><span>Дата</span><input name="date" type="date" value="${localIsoDate()}" required></label><div class="savings-increase-actions"><button class="primary-button" type="submit">Изменить капитал</button><button class="secondary-button" type="button" data-savings-history="${item.id}" aria-label="Открыть историю счёта ${esc(item.name)}">История</button></div></form></article>`).join('')}</div>` : '<div class="empty-state">Добавьте первый накопительный счёт.</div>'}</section>
-    <section class="card savings-create"><div class="section-title"><h3>Новый накопительный счёт</h3></div><form id="savings-create-form" class="savings-create-form"><label class="field"><span>Название</span><input name="name" maxlength="100" required placeholder="Например, Резервный вклад"></label><label class="field"><span>Тип</span><select name="type"><option value="Отложенные">${translate('Отложенные')}</option><option value="Вклад">${translate('Вклад')}</option></select></label><label class="field"><span>Валюта</span><select name="currency">${currencies.map((value) => `<option>${esc(value)}</option>`).join('')}</select></label><label class="field"><span>Начальный капитал</span><input name="initialCapital" type="number" min="0" step="0.01" value="0" required></label><button class="primary-button" type="submit">Добавить счёт</button></form></section>
-    <section class="card savings-transfer"><div class="section-title"><h3>Вывод на обычный счёт</h3><span>Пополнение накоплений оформляется как инвестиция</span></div>${mainAccounts.length && savings.length ? `<form id="savings-transfer-form" class="savings-transfer-form"><input type="hidden" name="direction" value="from-savings"><label class="field savings-transfer-savings-account"><span>Счёт накоплений</span><select name="savingAccountId">${savings.map((item) => `<option value="${item.id}">${esc(item.name)} · ${esc(item.currency)}</option>`).join('')}</select></label><label class="field savings-transfer-saving-amount"><span>Сумма списания · ${esc(savings[0].currency)}</span><input name="savingAmount" type="number" min="0.000001" step="any" required></label><label class="field savings-transfer-main-account"><span>Обычный счёт для зачисления</span><select name="mainAccountId">${mainAccounts.map((item) => `<option value="${item.id}">${esc(item.name)} · ${esc(item.currency)}</option>`).join('')}</select></label><label class="field savings-transfer-main-amount"><span>Сумма зачисления · ${esc(mainAccounts[0].currency)}</span><input name="mainAmount" type="number" min="0.000001" step="any" required></label><label class="field savings-transfer-date"><span>Дата</span><input name="date" type="date" value="${localIsoDate()}" required></label><button class="primary-button savings-transfer-submit" type="submit">Вывести</button></form>` : '<p class="reference-note">Для вывода добавьте хотя бы один счёт в каждом учёте.</p>'}</section>
+    <section class="card savings-create"><div class="section-title"><h3>Новый накопительный счёт</h3></div><form id="savings-create-form" class="savings-create-form"><label class="field"><span>Название</span><input name="name" maxlength="100" required placeholder="Например, Резервный вклад"></label><label class="field"><span>Тип</span><select name="type"><option value="Отложенные">${translate('Отложенные')}</option><option value="Вклад">${translate('Вклад')}</option></select></label><label class="field"><span>Валюта</span><select name="currency">${currencies.map((value) => `<option data-locale-preserve>${esc(value)}</option>`).join('')}</select></label><label class="field"><span>Начальный капитал</span><input name="initialCapital" type="number" min="0" step="0.01" value="0" required></label><button class="primary-button" type="submit">Добавить счёт</button></form></section>
+    <section class="card savings-transfer"><div class="section-title"><h3>Вывод на обычный счёт</h3><span>Пополнение накоплений оформляется как инвестиция</span></div>${mainAccounts.length && savings.length ? `<form id="savings-transfer-form" class="savings-transfer-form"><input type="hidden" name="direction" value="from-savings"><label class="field savings-transfer-savings-account"><span>Счёт накоплений</span><select name="savingAccountId">${savings.map((item) => `<option data-locale-preserve value="${item.id}">${esc(item.name)} · ${esc(item.currency)}</option>`).join('')}</select></label><label class="field savings-transfer-saving-amount"><span>Сумма списания · ${esc(savings[0].currency)}</span><input name="savingAmount" type="number" min="0.000001" step="any" required></label><label class="field savings-transfer-main-account"><span>Обычный счёт для зачисления</span><select name="mainAccountId">${mainAccounts.map((item) => `<option data-locale-preserve value="${item.id}">${esc(item.name)} · ${esc(item.currency)}</option>`).join('')}</select></label><label class="field savings-transfer-main-amount"><span>Сумма зачисления · ${esc(mainAccounts[0].currency)}</span><input name="mainAmount" type="number" min="0.000001" step="any" required></label><label class="field savings-transfer-date"><span>Дата</span><input name="date" type="date" value="${localIsoDate()}" required></label><button class="primary-button savings-transfer-submit" type="submit">Вывести</button></form>` : '<p class="reference-note">Для вывода добавьте хотя бы один счёт в каждом учёте.</p>'}</section>
     <section class="card currency-comparison savings-comparison"><h2>Изменение стоимости текущего остатка</h2></section>`;
   const comparison = content.querySelector('.savings-comparison');
   loadCurrencyComparison(comparison, 'savings');
@@ -877,7 +906,7 @@ function renderPhoneSetup() {
   let nextStep = 'Нажмите «Подготовить данные для телефона», затем дождитесь синхронизации папки.';
   if (mobile.state === 'ready') {
     statusTitle = 'На компьютере подготовлены счета';
-    statusDescription = `${mobile.accountCount} активных счетов и справочники записаны в папку Finance Sync.`;
+    statusDescription = `${translateCount('activeAccounts', mobile.accountCount)} ${translate('и справочники записаны в папку Finance Sync.')}`;
     statusClass = 'setup-status-ready';
     nextStep = checkedCount < 2 ? 'Подключите папку Finance Sync на телефоне и добавьте её в хранилище Obsidian.' : 'Откройте форму Finance Capture в Obsidian и проверьте, что в ней видны счета.';
   } else if (mobile.state === 'no-accounts') {
@@ -935,7 +964,7 @@ function renderSettings() {
   const settingRow = (label, value) => `<div class="setting-row"><span>${esc(label)}</span><strong class="setting-value" title="${esc(value || '—')}">${esc(value || '—')}</strong></div>`;
   const updateInfo = state.updateCheck;
   const availableUpdate = updateInfo?.enabled && updateInfo.update
-    ? `<p class="update-message">Доступна версия <strong>${esc(updateInfo.update.version)}</strong> (${updateInfo.update.channel === 'beta' ? 'beta' : 'стабильная'}).</p>${updateInfo.update.notes ? `<pre class="update-notes">${esc(updateInfo.update.notes)}</pre>` : ''}<div class="settings-actions settings-actions-wrap"><a class="secondary-button update-release-link" href="${esc(updateInfo.update.url)}" target="_blank" rel="noopener">Описание выпуска</a><button class="primary-button" type="button" data-install-update="${esc(updateInfo.update.version)}">Скачать и установить</button></div>`
+    ? `<p class="update-message">${translate('Доступна версия')} <strong>${esc(updateInfo.update.version)}</strong> (${translate(updateInfo.update.channel === 'beta' ? 'beta' : 'стабильная')}).</p>${updateInfo.update.notes ? `<pre class="update-notes">${esc(updateInfo.update.notes)}</pre>` : ''}<div class="settings-actions settings-actions-wrap"><a class="secondary-button update-release-link" href="${esc(updateInfo.update.url)}" target="_blank" rel="noopener">Описание выпуска</a><button class="primary-button" type="button" data-install-update="${esc(updateInfo.update.version)}">Скачать и установить</button></div>`
     : '';
   const updateResult = state.updateInstallQueued
     ? '<p class="update-message">Установщик запущен. Завершите установку в его окне; Finance перезапустится после неё.</p>'
@@ -965,7 +994,7 @@ function renderSettings() {
     ? `<p class="recovery-report">SHA-256: <code>${esc(state.recoveryResult.manifest.sha256)}</code><br>Создан: ${esc(new Date(state.recoveryResult.manifest.createdAt).toLocaleString(localeCode()))} · Книга: ${number(state.recoveryResult.workbookBytes / 1024 / 1024, 1)} MB</p>`
     : '';
   content.innerHTML = `${pageHeader('Настройки', 'Системные параметры приложения')}
-    <label class="field locale-setting"><span>Язык интерфейса</span><select id="locale-select"><option value="ru">Русский</option><option value="en">English</option></select></label>
+    <label class="field locale-setting"><span>Язык интерфейса</span><select id="locale-select"><option data-locale-preserve value="ru">Русский</option><option data-locale-preserve value="en">English</option></select></label>
     <article class="card settings-card settings-recovery-card"><div class="card-head"><div><h2>Копия на другом носителе</h2><p>Создайте ZIP всей книги и проверьте его перед хранением.</p></div></div>
       <p class="recovery-help">Архив содержит полную финансовую книгу и постоянный реестр синхронизации. ZIP не зашифрован: храните его на защищённом носителе с ограниченным доступом. Выберите другой физический диск. Finance не отправляет архив в интернет.</p>
       <button class="primary-button" type="button" data-recovery-export ${state.recoveryBusy ? 'disabled' : ''}>${state.recoveryBusy ? 'Подождите…' : 'Создать recovery-архив'}</button>
@@ -1017,16 +1046,16 @@ function updateTopbarActions() {
 
 function populateOperationForm(type = 'Расход', savingsTransfer = '') {
   const categorySelect = operationForm.elements.category;
-  categorySelect.innerHTML = state.data.lists.categories.filter((item) => item.type === type).map((item) => `<option value="${esc(item.name)}">${esc(categoryLabel(item.name))}</option>`).join('');
+  categorySelect.innerHTML = state.data.lists.categories.filter((item) => item.type === type).map((item) => `<option data-locale-preserve value="${esc(item.name)}">${esc(categoryLabel(item.name))}</option>`).join('');
   const activeAccounts = accounts().filter((item) => item.active);
-  const accountOptions = activeAccounts.map((item) => `<option value="${item.id}">${esc(item.name)} · ${esc(item.currency)}</option>`).join('');
+  const accountOptions = activeAccounts.map((item) => `<option data-locale-preserve value="${item.id}">${esc(item.name)} · ${esc(item.currency)}</option>`).join('');
   const savings = state.data.savingsAccounts || [];
   operationForm.elements.accountId.innerHTML = accountOptions;
   operationForm.elements.destinationAccountId.innerHTML = accountOptions;
-  operationForm.elements.savingsAccountId.innerHTML = savings.map((item) => `<option value="${item.id}">${esc(item.name)} · ${esc(item.currency)}</option>`).join('');
+  operationForm.elements.savingsAccountId.innerHTML = savings.map((item) => `<option data-locale-preserve value="${item.id}">${esc(item.name)} · ${esc(item.currency)}</option>`).join('');
   if (type === 'Перевод' && activeAccounts.length > 1) operationForm.elements.destinationAccountId.value = String(activeAccounts[1].id);
-  operationForm.elements.currency.innerHTML = state.data.lists.currencies.map((item) => `<option>${esc(item)}</option>`).join('');
-  operationForm.elements.necessity.innerHTML = state.data.lists.necessities.map((item) => `<option>${esc(item)}</option>`).join('');
+  operationForm.elements.currency.innerHTML = state.data.lists.currencies.map((item) => `<option data-locale-preserve>${esc(item)}</option>`).join('');
+  operationForm.elements.necessity.innerHTML = state.data.lists.necessities.map((item) => `<option data-locale-preserve>${esc(item)}</option>`).join('');
   const transfer = type === 'Перевод';
   const investment = type === 'Инвестиция';
   const fromSavings = transfer && savingsTransfer === 'from-savings';
@@ -1147,6 +1176,17 @@ async function updateRateUi(fetchRate = true) {
 }
 
 document.addEventListener('click', async (event) => {
+  if (event.target.closest('#topbar-update-notice')) {
+    if (draftDirty && !ask('Перейти к обновлению? Несохранённая форма будет закрыта.')) return;
+    navigateTo('settings');
+    requestAnimationFrame(() => {
+      const target = content.querySelector('[data-install-update]') || content.querySelector('[data-check-update]');
+      if (!target) return;
+      target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      target.focus({ preventScroll: true });
+    });
+    return;
+  }
   const repairOpening = event.target.closest('[data-repair-opening-rates]');
   if (repairOpening) {
     repairOpening.disabled = true;
@@ -1411,7 +1451,7 @@ document.addEventListener('click', async (event) => {
   }
   if (event.target.closest('[data-open-restore]')) {
     const select = restoreForm.elements.backup;
-    select.innerHTML = (state.settings.backups || []).map((backup) => `<option value="${esc(backup.name)}">${esc(new Date(backup.modifiedAt).toLocaleString(localeCode()))} · ${number(backup.size / 1024, 0)} ${translate('КБ')} · ${esc(backup.name)}</option>`).join('');
+    select.innerHTML = (state.settings.backups || []).map((backup) => `<option data-locale-preserve value="${esc(backup.name)}">${esc(new Date(backup.modifiedAt).toLocaleString(localeCode()))} · ${number(backup.size / 1024, 0)} ${translate('КБ')} · ${esc(backup.name)}</option>`).join('');
     restoreForm.querySelector('#restore-backup-details').textContent = select.options.length ? 'Перед восстановлением будет создана страховочная копия текущей книги.' : 'Доступных резервных копий нет.';
     restoreForm.querySelector('button[type="submit"]').disabled = !select.options.length;
     restoreDialog.showModal();

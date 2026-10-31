@@ -62,9 +62,9 @@ test('Windows package output can use a dedicated directory confined to .release'
   assert.match(packageScript, /lib\\client-presence\.mjs/);
 });
 
-test('project, lock file and installer default share the 1.3.0 release version', () => {
-  assert.equal(packageInfo.version, '1.3.0');
-  assert.equal(lockInfo.version, '1.3.0');
-  assert.equal(lockInfo.packages[''].version, '1.3.0');
-  assert.match(installerScript, /#define AppVersion "1\.3\.0"/);
+test('project, lock file and installer default share the 1.3.1 release version', () => {
+  assert.equal(packageInfo.version, '1.3.1');
+  assert.equal(lockInfo.version, '1.3.1');
+  assert.equal(lockInfo.packages[''].version, '1.3.1');
+  assert.match(installerScript, /#define AppVersion "1\.3\.1"/);
 });

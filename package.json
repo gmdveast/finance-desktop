@@ -1,6 +1,6 @@
 {
   "name": "finance-workbook-dashboard",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "private": true,
   "description": "Local finance dashboard backed by an Excel workbook",
   "type": "module",
@@ -11,7 +11,7 @@
     "dev": "node --watch server.js",
     "import:inbox": "node scripts/import-inbox.mjs",
     "setup:submodules": "git submodule update --init --recursive",
-    "check": "node --check server.js && node --check public/app.js && node --check public/setup.js && node --check public/i18n.js && node --check public/presence.js && node --check scripts/import-inbox.mjs && node --check scripts/stop-server.mjs && node --check scripts/restore-backup.mjs && node --check scripts/desktop-launcher.mjs && node --check scripts/open-workdir-preview.mjs && node --check lib/workbook-store.mjs && node --check lib/first-run.mjs && node --check lib/client-presence.mjs && node --check lib/runtime-control.mjs && node --check lib/update-service.mjs && node --check lib/identity-state.mjs && node --check obsidian-plugin/finance-capture/main.js && node --check lib/input-boundary.mjs && node scripts/sync-mobile-validation.mjs --check && node --check lib/recovery-bundle.mjs && node --check scripts/recovery-bundle.mjs && node --check scripts/benchmark.mjs && node --check scripts/source-bundle.mjs && node --check scripts/manual-mobile.mjs",
+    "check": "node --check server.js && node --check public/app.js && node --check public/setup.js && node --check public/i18n.js && node --check public/presence.js && node --check scripts/check-locales.mjs && node scripts/check-locales.mjs && node --check scripts/import-inbox.mjs && node --check scripts/stop-server.mjs && node --check scripts/restore-backup.mjs && node --check scripts/desktop-launcher.mjs && node --check scripts/open-workdir-preview.mjs && node --check lib/workbook-store.mjs && node --check lib/first-run.mjs && node --check lib/client-presence.mjs && node --check lib/runtime-control.mjs && node --check lib/update-service.mjs && node --check lib/identity-state.mjs && node --check obsidian-plugin/finance-capture/main.js && node --check lib/input-boundary.mjs && node scripts/sync-mobile-validation.mjs --check && node --check lib/recovery-bundle.mjs && node --check scripts/recovery-bundle.mjs && node --check scripts/benchmark.mjs && node --check scripts/source-bundle.mjs && node --check scripts/manual-mobile.mjs",
     "test": "npm run test:contracts && npm run test:plugin && npm run test:recovery && npm run test:updates && npm run test:installer && npm run test:client-presence && npm run test:storage && npm run test:api && npm run test:e2e",
     "test:storage": "node --test --test-isolation=none tests/storage.test.mjs",
     "test:plugin": "node --test --test-isolation=none tests/plugin.test.cjs",

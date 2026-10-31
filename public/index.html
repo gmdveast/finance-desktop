@@ -35,7 +35,17 @@
     <main class="main">
       <header class="topbar">
         <button class="mobile-menu" id="mobile-menu" aria-label="Открыть меню">☰</button>
-        <div class="eyebrow">Личный финансовый журнал</div>
+        <div class="topbar-context">
+          <div class="eyebrow">Личный финансовый журнал</div>
+          <div class="topbar-update-region" role="status" aria-live="polite" aria-atomic="true">
+            <button class="topbar-update-notice" id="topbar-update-notice" type="button" hidden>
+              <span class="update-notice-dot" aria-hidden="true"></span>
+              <span class="update-notice-label">Доступно обновление Finance</span>
+              <strong class="update-notice-version"></strong>
+              <span class="update-notice-arrow" aria-hidden="true">↗</span>
+            </button>
+          </div>
+        </div>
         <div class="topbar-actions">
           <button class="secondary-button" type="button" data-action="refresh-rates" aria-label="Обновить курсы ЦБ" title="Обновить курсы ЦБ"><span class="topbar-icon topbar-icon-text" aria-hidden="true">↻</span><span class="desktop-label">Обновить курсы</span><span class="mobile-label">Курсы</span></button>
           <button class="primary-button" type="button" data-action="add-operation" aria-label="Новая операция"><span class="topbar-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span><span class="desktop-label">Новая операция</span><span class="mobile-label">Новая</span></button>

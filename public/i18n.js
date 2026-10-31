@@ -1,8 +1,8 @@
 const STORAGE_KEY = 'finance:locale';
 const TEXT_SOURCE = new WeakMap();
 const ATTRIBUTE_SOURCE = new WeakMap();
-const ATTRIBUTES = ['title', 'aria-label', 'placeholder', 'alt'];
-const PRESERVED = '[data-locale-preserve], .operation-note, .operation-category-label, .account-route, .account-name, .category-name, .setting-value, code, option';
+const ATTRIBUTES = ['title', 'aria-label', 'placeholder', 'alt', 'label'];
+const PRESERVED = '[data-locale-preserve], .operation-note, .operation-category-label, .account-route, .account-name, .category-name, .setting-value, code';
 let locale = 'ru';
 let catalog = { messages: {}, fragments: {}, plurals: {}, errors: {} };
 let observer = null;

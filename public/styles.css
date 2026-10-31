@@ -63,7 +63,17 @@ button { cursor: pointer; }
 .file-state small { display: block; max-width: 160px; color: #92a49c; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
 
 .main { min-width: 0; }
-.topbar { height: 86px; padding: 0 clamp(24px, 4vw, 58px); display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(23,35,31,.08); }
+.topbar { height: 86px; padding: 0 clamp(24px, 4vw, 58px); display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid rgba(23,35,31,.08); }
+.topbar-context { display: flex; align-items: center; gap: 14px; min-width: 0; flex: 1 1 auto; }
+.topbar-update-region { display: flex; align-items: center; min-width: 0; }
+.topbar-update-notice { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; min-height: 42px; padding: 9px 12px; border: 1px solid #edcf98; border-radius: 12px; background: #fff3dd; color: #704613; font-size: 11px; font-weight: 800; text-align: left; }
+.topbar-update-notice[hidden] { display: none; }
+.topbar-update-notice:hover { background: #ffe9c1; }
+.topbar-update-notice:focus-visible { outline: 3px solid var(--forest-2); outline-offset: 2px; }
+.update-notice-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: #d58920; }
+.update-notice-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.update-notice-version { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.update-notice-arrow { flex: 0 0 auto; margin-left: 2px; font-size: 14px; }
 .topbar-actions { display: flex; align-items: center; gap: 10px; }
 .topbar-actions > button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; line-height: 1.25; }
 .topbar-actions > button[hidden] { display: none; }
@@ -104,6 +114,8 @@ button { cursor: pointer; }
 .overview-main .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; }
 .overview-main .metric { min-width: 0; }
 .overview-chart-card { min-width: 0; }
+.spending-card { display: flex; min-height: 0; flex-direction: column; overflow: hidden; }
+.spending-card > label { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; margin-bottom: 18px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 22px; box-shadow: var(--shadow); }
 .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
 .card-head h2 { margin: 0; font-size: 16px; }
@@ -119,6 +131,8 @@ button { cursor: pointer; }
 .legend i.expense { background: var(--expense-series); }
 .legend i.investment { background: var(--investment-series); }
 .category-list { display: grid; gap: 15px; max-height: 300px; overflow-y: auto; padding-right: 8px; }
+.spending-card .category-list { flex: 1 1 0; min-height: 0; max-height: none; overflow-y: auto; overscroll-behavior: contain; align-content: start; }
+.spending-card .category-list:focus-visible { outline: 3px solid var(--forest-2); outline-offset: -3px; border-radius: 8px; }
 .category-row { display: grid; grid-template-columns: 1fr auto; gap: 7px 12px; font-size: 12px; }
 .category-name small { margin-left: 5px; color: var(--muted); font-size: 10px; }
 .category-row strong { font-size: 12px; }
@@ -420,7 +434,6 @@ input[name="destinationAmount"][readonly], #investment-category-label[readonly] 
 .toast-stack { position: fixed; right: 24px; bottom: 24px; z-index: 100; display: flex; flex-direction: column; gap: 10px; width: min(420px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow-y: auto; pointer-events: none; }
 .toast { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: start; gap: 12px; box-sizing: border-box; width: 100%; max-width: 420px; padding: 14px 14px 14px 18px; border-radius: 12px; background: var(--forest); color: white; box-shadow: var(--shadow); font-size: 12px; opacity: 0; transform: translateY(12px); transition: opacity .22s ease, transform .22s ease; pointer-events: auto; }
 .toast-stack { scrollbar-width: none; }
-.spending-card .category-list { max-height: 420px; overflow-y: auto; }
 .overview-opening-toggle { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; }
 .toast-stack::-webkit-scrollbar { display: none; }
 .toast.show { transform: translateY(0); opacity: 1; }
@@ -437,6 +450,7 @@ input[name="destinationAmount"][readonly], #investment-category-label[readonly] 
 @media (max-width: 1050px) {
   .metrics { grid-template-columns: repeat(2, 1fr); }
   .dashboard-grid { grid-template-columns: 1fr; }
+  .spending-card { min-height: clamp(380px, 65vh, 500px); }
   .recent-card { grid-column: auto; }
 }
 @media (max-width: 760px) {
@@ -446,6 +460,9 @@ input[name="destinationAmount"][readonly], #investment-category-label[readonly] 
   .mobile-menu { display: block; }
   .topbar .eyebrow { display: none; }
   .topbar { height: 72px; }
+  .topbar-context { flex: 1 1 0; }
+  .topbar-update-region { width: 100%; }
+  .topbar-update-notice { width: 100%; min-height: 40px; gap: 6px; padding: 7px 8px; font-size: 10px; }
   .topbar-actions { margin-left: auto; gap: 7px; }
   .content { padding-top: 28px; }
   .toast-stack { right: 14px; bottom: 14px; width: calc(100vw - 28px); max-height: calc(100vh - 28px); }

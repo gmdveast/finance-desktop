@@ -5,6 +5,47 @@ import { TEST_INSTANT } from './test-clock.mjs';
 
 const scenarios = [];
 const scenario = (name, run) => scenarios.push([name, run]);
+const englishCatalog = JSON.parse(await readFile(new URL('../public/locales/en.json', import.meta.url), 'utf8'));
+const englishPhrases = [...Object.values(englishCatalog.messages), ...Object.values(englishCatalog.fragments)];
+
+async function untranslatedUiText(page, locale = 'en') {
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  return page.evaluate(({ locale, englishPhrases }) => {
+    const preserved = '[data-locale-preserve], .operation-note, .operation-category-label, .account-route, .account-name, .category-name, .setting-value, code';
+    const hasCyrillic = (value) => /[\u0400-\u04FF]/u.test(value);
+    const allowedEnglishWords = /\b(?:Finance|Capture|Sync|Obsidian|Syncthing|GitHub|BRAT|RUB|USD|GEL|API|CSV|XML|JSON|CBR|SHA|URL|ID)\b/giu;
+    const normalizeEnglish = (value) => value
+      .replace(allowedEnglishWords, ' ')
+      .replace(/\{[^}]+\}/gu, ' ')
+      .replace(/\d+/gu, ' ')
+      .replace(/[^A-Za-z]+/gu, ' ')
+      .trim()
+      .toLowerCase();
+    const englishCandidates = englishPhrases.map(normalizeEnglish).filter((value) => value.length >= 4);
+    const isUntranslated = (value) => locale === 'en'
+      ? hasCyrillic(value)
+      : englishCandidates.some((candidate) => normalizeEnglish(value).includes(candidate));
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const strings = [];
+    let node;
+    while ((node = walker.nextNode())) {
+      const text = node.nodeValue.trim();
+      if (!text || !isUntranslated(text) || node.parentElement.closest(preserved)) continue;
+      strings.push({ text, tag: node.parentElement.tagName, className: node.parentElement.className });
+    }
+    for (const element of document.querySelectorAll('[title], [aria-label], [placeholder], [alt], [label]')) {
+      if (element.closest(`${preserved}, .keyboard-row`)) continue;
+      for (const attribute of ['title', 'aria-label', 'placeholder', 'alt', 'label']) {
+        const value = element.getAttribute(attribute)?.trim();
+        if (!value || !isUntranslated(value)) continue;
+        if (attribute === 'title' && element.matches('.account-name-cell input[name="name"]')) continue;
+        strings.push({ attribute, text: value, tag: element.tagName, className: element.className });
+      }
+    }
+    if (isUntranslated(document.title)) strings.push({ attribute: 'document.title', text: document.title });
+    return [...new Map(strings.map((entry) => [`${entry.attribute || 'text'}:${entry.text}`, entry])).values()];
+  }, { locale, englishPhrases });
+}
 
 test.beforeEach(async ({ page }) => {
   await page.clock.setFixedTime(new Date(TEST_INSTANT));
@@ -32,11 +73,38 @@ scenario('настройки отдельно показывают обновл�
   await expect(page.getByRole('heading', { name: 'Обновление Finance' })).toBeVisible();
   await expect(page.locator('.update-plugin-note')).toContainText('Finance Capture обновляется отдельно');
   await expect(page.locator('.update-plugin-note')).toContainText('Эта проверка desktop не меняет версию плагина');
+  const topbarUpdate = page.locator('#topbar-update-notice');
   await page.locator('[data-check-update]').click();
   await expect(page.getByText('Доступна версия 1.0.0-beta.2 (beta).')).toBeVisible();
   await expect(page.getByText('Исправления и упрощение обновления.')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Описание выпуска' })).toHaveAttribute('href', 'https://github.com/gmdveast/finance-desktop/releases/tag/v1.0.0-beta.2');
   await expect(page.getByRole('button', { name: 'Скачать и установить' })).toBeVisible();
+  await expect(topbarUpdate).toBeVisible();
+  await expect(topbarUpdate).toContainText('1.0.0-beta.2');
+  await expect(topbarUpdate).toHaveAttribute('aria-label', 'Доступно обновление Finance 1.0.0-beta.2. Открыть настройки обновления.');
+  await page.locator('.nav-item[data-view="overview"]').click();
+  await expect(topbarUpdate).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const narrowTopbar = await page.evaluate(() => {
+    const bar = document.querySelector('.topbar').getBoundingClientRect();
+    const notice = document.querySelector('#topbar-update-notice').getBoundingClientRect();
+    const actions = document.querySelector('.topbar-actions').getBoundingClientRect();
+    return {
+      noticeInsideViewport: notice.left >= 0 && notice.right <= window.innerWidth,
+      noticeBeforeActions: notice.right <= actions.left + 1,
+      pageFitsViewport: document.documentElement.scrollWidth <= window.innerWidth,
+      topbarHeight: bar.height,
+    };
+  });
+  expect(narrowTopbar.noticeInsideViewport).toBeTruthy();
+  expect(narrowTopbar.noticeBeforeActions).toBeTruthy();
+  expect(narrowTopbar.pageFitsViewport).toBeTruthy();
+  expect(narrowTopbar.topbarHeight).toBe(72);
+  await topbarUpdate.focus();
+  await expect(topbarUpdate).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#content h1')).toHaveText('Настройки');
+  await expect(page.locator('[data-install-update]')).toBeFocused();
 });
 
 scenario('настройки выравнивают кнопки по нижнему краю; иконки и логотип без ореола', async ({ page }) => {
@@ -183,6 +251,8 @@ scenario('фоновая проверка показывает цветной и
   const settingsButton = page.locator('.nav-item[data-view="settings"]');
   const indicator = settingsButton.locator('.nav-update-indicator');
   await expect(settingsButton).toHaveAttribute('data-update-available', 'true');
+  await expect(page.locator('#topbar-update-notice')).toBeVisible();
+  await expect(page.locator('#topbar-update-notice')).toContainText('1.0.0-beta.2');
   await expect(settingsButton).toHaveAttribute('aria-label', 'Настройки. Доступно обновление Finance 1.0.0-beta.2');
   await expect(indicator).toBeVisible();
   await expect(indicator).toHaveCSS('background-color', 'rgb(255, 184, 77)');
@@ -248,6 +318,7 @@ scenario('сбой фоновой проверки не показывает н�
   expect(await settingsButton.evaluate((button) => getComputedStyle(button, '::after').content)).toBe('none');
   await expect(page.locator('.settings-update-card .update-error')).toContainText('Не удалось проверить обновления. Повторите попытку.');
   await expect(page.locator('.settings-update-card')).not.toContainText('Установлена последняя доступная версия');
+  await expect(page.locator('#topbar-update-notice')).toBeHidden();
   await expect(page.locator('#toast-stack .toast')).toHaveCount(0);
 });
 
@@ -1365,6 +1436,14 @@ scenario('lifecycle: delayed background response preserves a draft started durin
 });
 
 scenario('locales: desktop and first-run screens switch RU/EN and retain the selected language', async ({ page }) => {
+  await page.route('**/api/updates/check', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ enabled: true, currentVersion: '1.3.0', channel: 'stable', update: {
+      version: '1.3.1', channel: 'stable', publishedAt: '2026-10-30T10:00:00Z', notes: '',
+      url: 'https://example.invalid/release', installerName: 'Finance-Setup-1.3.1-x64.exe',
+    } }),
+  }));
   await page.goto('/#settings');
   await page.evaluate(() => localStorage.setItem('finance:locale', 'en'));
   await page.reload();
@@ -1392,7 +1471,27 @@ scenario('locales: desktop and first-run screens switch RU/EN and retain the sel
   ]) {
     await page.goto(`/#${view}`);
     await expect(page.locator('#content h1')).toHaveText(heading);
+    if (view === 'balance') await expect(page.locator('.currency-comparison p')).toBeVisible();
+    const untranslated = await untranslatedUiText(page);
+    expect(untranslated, `Untranslated Russian UI on #${view}`).toEqual([]);
   }
+  await page.locator('#locale-select').selectOption('ru');
+  for (const view of ['overview', 'operations', 'balance', 'savings', 'lists', 'phone', 'settings']) {
+    await page.goto(`/#${view}`);
+    const untranslated = await untranslatedUiText(page, 'ru');
+    expect(untranslated, `Untranslated English UI on #${view}`).toEqual([]);
+  }
+  await page.locator('#locale-select').selectOption('en');
+  await page.locator('[data-check-update]').click();
+  const updateNotice = page.locator('#topbar-update-notice');
+  await expect(updateNotice).toBeVisible();
+  await expect(updateNotice).toContainText('Finance update available');
+  await expect(updateNotice).toHaveAttribute('aria-label', 'Finance update available: 1.3.1. Open update settings.');
+  expect(await untranslatedUiText(page), 'Untranslated Russian UI with update notice').toEqual([]);
+  await page.locator('#locale-select').selectOption('ru');
+  await expect(updateNotice).toHaveAttribute('aria-label', 'Доступно обновление Finance 1.3.1. Открыть настройки обновления.');
+  await page.locator('#locale-select').selectOption('en');
+  await expect(updateNotice).toHaveAttribute('aria-label', 'Finance update available: 1.3.1. Open update settings.');
   await page.route('**/api/settings/export-mobile', (route) => route.fulfill({
     status: 503,
     contentType: 'application/json',
@@ -1402,8 +1501,10 @@ scenario('locales: desktop and first-run screens switch RU/EN and retain the sel
   await page.getByRole('button', { name: 'Update Obsidian data' }).click();
   await expect(page.locator('#toast-stack')).toContainText('Finance could not save the workbook.');
   await expect(page.locator('#toast-stack')).toContainText('You can try again after fixing the issue.');
+  expect(await untranslatedUiText(page), 'Untranslated Russian UI in error toast').toEqual([]);
   await page.goto('/#operations');
   await expect(page.locator('#operation-search')).toHaveAttribute('placeholder', 'Note, category, or account');
+  await expect(page.locator('#operation-category option[data-locale-preserve]').filter({ hasText: 'Продукты' })).toHaveCount(1);
   const typeOptions = await page.locator('#operation-type option').evaluateAll((options) => options.map((option) => ({ value: option.value, label: option.textContent.trim() })));
   expect(typeOptions).toEqual([
     { value: 'Все', label: 'All types' },
@@ -1412,15 +1513,32 @@ scenario('locales: desktop and first-run screens switch RU/EN and retain the sel
     { value: 'Перевод', label: 'Transfer' },
     { value: 'Инвестиция', label: 'Investment' },
   ]);
+  await expect(page.locator('#operation-category option').first()).toHaveText('All categories');
+  await expect(page.locator('#operation-category optgroup').first()).toHaveAttribute('label', 'Has operations in the selected period');
+  await expect(page.locator('#operation-account option').first()).toHaveText('All accounts');
+  await expect(page.locator('#operation-necessity option').first()).toHaveText('Any');
+  await page.goto('/#overview');
+  const directionOptions = await page.locator('#overview-direction option').allTextContents();
+  expect(directionOptions.map((value) => value.trim())).toEqual(['Expenses', 'Income']);
+  await expect(page.locator('.category-list')).toHaveAttribute('aria-label', 'Category list');
+  await page.locator('.nav-item[data-view="savings"]').click();
+  await expect(page.locator('.savings-metrics')).toContainText('Set aside');
+  await expect(page.locator('.savings-metrics')).toContainText('Deposits');
+  await page.goto('/#operations');
   await page.getByRole('button', { name: 'New operation' }).click();
   await expect(page.locator('#operation-dialog')).toBeVisible();
   await expect(page.locator('#operation-dialog [role="radiogroup"]')).toContainText('Expense');
+  const invalidAmount = page.locator('#operation-form [name="amount"]');
+  await invalidAmount.evaluate((input) => { input.value = 'abc'; input.dispatchEvent(new Event('input', { bubbles: true })); });
+  await expect.poll(() => invalidAmount.evaluate((input) => input.validationMessage)).toBe('Enter an amount using digits, commas, and a decimal point.');
+  expect(await untranslatedUiText(page), 'Untranslated Russian UI in operation form').toEqual([]);
   await page.evaluate(() => localStorage.removeItem('finance:locale'));
   await page.addInitScript(() => Object.defineProperty(navigator, 'language', { get: () => 'en-US' }));
   await page.goto('/setup.html');
   await expect(page.locator('html')).toHaveAttribute('lang', 'en');
   await expect(page.getByRole('heading', { level: 1 })).toHaveText("Let's set up your finance journal");
   await expect(page.getByRole('button', { name: 'Create a new workbook' })).toBeVisible();
+  expect(await untranslatedUiText(page), 'Untranslated Russian UI on /setup.html').toEqual([]);
 });
 
 scenario('recordedAt: operation list shows the server recording time for new rows', async ({ page, request }) => {
@@ -1618,9 +1736,11 @@ scenario('amount fields reject letters and unsupported symbols', async ({ page }
 });
 
 scenario('структура обзора прокручивается при длинном списке и показывает пустую группу', async ({ page }) => {
+  let manyCategories = false;
   await page.route('**/api/data', async (route) => {
     const response = await route.fetch();
     const data = await response.json();
+    if (!manyCategories) { await route.fulfill({ response, body: JSON.stringify(data) }); return; }
     const account = data.accounts[0];
     const lots = Array.from({ length: 24 }, (_, index) => ({
       name: `UI Long Category ${String(index).padStart(2, '0')}`,
@@ -1644,9 +1764,45 @@ scenario('структура обзора прокручивается при д
     await route.fulfill({ response, body: JSON.stringify(data) });
   });
   await page.goto('/#overview');
-  const dimensions = await page.locator('.category-list').evaluate((list) => ({ scrollHeight: list.scrollHeight, clientHeight: list.clientHeight, overflowY: getComputedStyle(list).overflowY }));
-  expect(dimensions.scrollHeight).toBeGreaterThan(dimensions.clientHeight);
-  expect(dimensions.overflowY).toBe('auto');
+  let firstWidth = true;
+  for (const width of [1280, 900, 390]) {
+    if (!firstWidth) { manyCategories = false; await page.reload(); }
+    firstWidth = false;
+    await page.setViewportSize({ width, height: 900 });
+    const before = await page.locator('.spending-card').evaluate((card) => card.getBoundingClientRect().height);
+    manyCategories = true;
+    await page.reload();
+    await expect(page.locator('.category-row')).toHaveCount(24);
+    const geometry = await page.locator('.spending-card').evaluate((card) => {
+      const list = card.querySelector('.category-list');
+      return {
+        cardHeight: card.getBoundingClientRect().height,
+        mainHeight: document.querySelector('.overview-main').getBoundingClientRect().height,
+        scrollHeight: list.scrollHeight,
+        clientHeight: list.clientHeight,
+        overflowY: getComputedStyle(list).overflowY,
+        touchAction: getComputedStyle(list).touchAction,
+        focusable: list.tabIndex === 0,
+      };
+    });
+    expect(Math.abs(geometry.cardHeight - before)).toBeLessThanOrEqual(1);
+    expect(geometry.scrollHeight).toBeGreaterThan(geometry.clientHeight);
+    expect(geometry.overflowY).toBe('auto');
+    expect(geometry.touchAction).not.toBe('none');
+    expect(geometry.focusable).toBeTruthy();
+    if (width > 1050) expect(Math.abs(geometry.mainHeight - geometry.cardHeight)).toBeLessThanOrEqual(1);
+    if (width === 1280) {
+      const list = page.locator('.category-list');
+      await list.focus();
+      await page.keyboard.press('End');
+      await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      await list.evaluate((element) => { element.scrollTop = 0; });
+      await list.hover();
+      await page.mouse.wheel(0, 160);
+      await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    }
+    manyCategories = false;
+  }
   await page.locator('#overview-direction').selectOption('income');
   await expect(page.locator('.category-list .empty-state')).toBeVisible();
 });
