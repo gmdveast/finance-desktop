@@ -57,12 +57,12 @@ function loadPlugin() {
     constructor(containerEl) { this.containerEl = containerEl; }
   }
   class Plugin {
-    constructor(app) { this.app = app; this.commands = []; this.processors = new Map(); this.data = {}; this.eventRefs = []; }
+    constructor(app) { this.app = app; this.commands = []; this.processors = new Map(); this.data = { language: 'ru' }; this.eventRefs = []; }
     async loadData() { return this.data; }
     async saveData(value) { this.data = JSON.parse(JSON.stringify(value)); }
     addRibbonIcon() {}
     addCommand(command) { this.commands.push(command); }
-    addSettingTab() {}
+    addSettingTab(tab) { this.settingTab = tab; }
     registerInterval(interval) { clearInterval(interval); }
     registerEvent(ref) { this.eventRefs.push(ref); }
     unload() { this.onunload(); this.eventRefs.forEach((ref) => this.app.vault.offref(ref)); this.eventRefs = []; }
@@ -88,6 +88,7 @@ function loadPlugin() {
   const obsidian = {
     MarkdownRenderChild,
     Modal,
+    moment: Object.assign(() => {}, { locale: () => 'ru-RU' }),
     Notice: class Notice { constructor(message) { notices.push(message); } },
     Plugin,
     PluginSettingTab,
@@ -144,6 +145,92 @@ test('форматирует суммы с точками тысяч и сохр
   assert.equal(PluginClass.formatAmountInputValue('1234.56'), '1.234,56');
   assert.equal(PluginClass.parseAmountInputValue('1.234.567,89'), 1234567.89);
   assert.equal(PluginClass.parseAmountInputValue('1234.56'), 1234.56);
+});
+
+test('localization: locale detection, dictionaries, amounts, dates and plural forms', () => {
+  const { PluginClass } = loadPlugin();
+  assert.equal(PluginClass.resolveLocale('system', 'ru-RU'), 'ru');
+  assert.equal(PluginClass.resolveLocale('system', 'en-GB'), 'en');
+  assert.equal(PluginClass.resolveLocale('system'), 'ru');
+  assert.equal(PluginClass.resolveLocale('ru', 'en-US'), 'ru');
+  assert.equal(PluginClass.resolveLocale('unsupported', 'fr-FR'), 'en');
+  assert.deepEqual(Object.keys(PluginClass.localeMessages.en).sort(), Object.keys(PluginClass.localeMessages.ru).sort());
+  assert.equal(PluginClass.formatAmountInputValue('1234567.89', -1, false, 'en'), '1,234,567.89');
+  assert.equal(PluginClass.parseAmountInputValue('1,234,567.89', 'en'), 1234567.89);
+  assert.equal(PluginClass.parseAmountInputValue('1234,56', 'en'), 1234.56);
+  const englishInput = { value: '', selectionStart: 0, addEventListener(name, handler) { if (name === 'input') this.handleInput = handler; }, setSelectionRange(start) { this.selectionStart = start; } };
+  const englishField = { inputEl: englishInput, setValue(value) { englishInput.value = value; return this; }, onChange() { return this; } };
+  PluginClass.configureAmountInput(englishField, '1234', () => {}, 'en');
+  englishInput.value = '1,234,';
+  englishInput.selectionStart = englishInput.value.length;
+  englishInput.handleInput({ data: ',', inputType: 'insertText' });
+  assert.equal(englishInput.value, '1,234.');
+  englishInput.value += '5';
+  englishInput.selectionStart = englishInput.value.length;
+  englishInput.handleInput({ data: '5', inputType: 'insertText' });
+  assert.equal(englishInput.value, '1,234.5');
+  assert.equal(PluginClass.formatDateInput('2026-10-31', 'ru'), '31.10.2026');
+  assert.equal(PluginClass.parseDateInput('31.10.2026', 'ru'), '2026-10-31');
+  assert.equal(PluginClass.parseDateInput('2026-10-31', 'en'), '2026-10-31');
+  assert.equal(PluginClass.parseDateInput('31.02.2026', 'ru'), null);
+  assert.equal(PluginClass.translate('en', 'type.expense'), 'Expense');
+  assert.equal(PluginClass.operationCount(2, 'en'), '2 operations');
+  assert.match(PluginClass.operationCount(2, 'ru'), /2 операции$/);
+});
+
+test('localization: English UI and cards preserve the canonical operation contract', async () => {
+  const { PluginClass } = loadPlugin();
+  const vault = new FakeVault();
+  const plugin = new PluginClass({ vault });
+  plugin.data = { language: 'en' };
+  await plugin.onload();
+  plugin.captureLists.accounts = [{ id: 5, name: 'Everyday', currency: 'RUB' }];
+
+  const panel = renderElement();
+  await plugin.processors.get('finance-capture')('', panel);
+  assert.match(renderedText(panel), /New financial transaction/);
+  assert.ok(panel.settings.some((setting) => setting.name === 'Category'));
+  const typeField = panel.settings.find((setting) => setting.name === 'Type').field;
+  assert.equal(typeField.options['Расход'], 'Expense');
+  assert.equal(typeField.options['Доход'], 'Income');
+  plugin.captureLists.accounts = [{ id: 5, name: 'Everyday', currency: 'RUB' }];
+
+  const saved = await plugin.saveOperation({ ...sampleOperation, notes: 'Lunch' });
+  assert.match(saved.recordPath, /1 — Pending —/);
+  const event = JSON.parse(await vault.cachedRead(vault.getAbstractFileByPath(saved.jsonPath)));
+  assert.equal(event.operation.type, 'Расход');
+  assert.equal(event.operation.category, 'Продукты');
+  const card = await vault.cachedRead(vault.getAbstractFileByPath(saved.recordPath));
+  assert.match(card, /finance_locale: "en"/);
+  assert.match(card, /# Expense: 🛒 Продукты/);
+  assert.match(card, /\| Field \| Value \|/);
+  assert.match(card, /\| Date \| Oct 14, 2026 \|/);
+
+  plugin.settings.language = 'ru';
+  await vault.delete(vault.getAbstractFileByPath(saved.jsonPath));
+  const archivedCard = vault.getFiles().find((file) => file.content.includes(saved.id));
+  assert.match(archivedCard.path, /2 — Archived —/);
+  assert.match(archivedCard.content, /Archived: JSON is no longer in the queue/);
+  assert.doesNotMatch(archivedCard.content, /Архив: JSON отсутствует/);
+  plugin.onunload();
+});
+
+test('localization: language setting persists and refreshes open panels', async () => {
+  const { PluginClass } = loadPlugin();
+  const plugin = new PluginClass({ vault: new FakeVault() });
+  await plugin.onload();
+  plugin.settingTab.containerEl = renderElement();
+  plugin.settingTab.display();
+  const language = plugin.settingTab.containerEl.settings.find((setting) => setting.name === 'Язык').field;
+  assert.equal(language.value, 'ru');
+  assert.equal(language.options.system, 'Язык Obsidian');
+  let refreshes = 0;
+  plugin.captureFormRefreshers.add((messageKey) => { assert.equal(messageKey, ''); refreshes += 1; });
+  await language.change('en');
+  assert.equal(plugin.settings.language, 'en');
+  assert.equal(plugin.data.language, 'en');
+  assert.equal(refreshes, 1);
+  plugin.onunload();
 });
 
 test('стирание суммы не превращает неполную группу тысяч в дробную часть', () => {
@@ -503,7 +590,7 @@ test('Obsidian-плагин создаёт панель и связанную re
     assert.equal(queued.cardCreated, false);
     assert.equal(queued.recordPath, null);
     assert.ok(vault.files.has(queued.jsonPath));
-    assert.ok(notices.some((message) => message.startsWith('Операция сохранена, но карточку создать не удалось:')));
+      assert.ok(notices.includes('Операция сохранена, но карточку создать не удалось.'));
   });
 
   await t.test('панель управления удаляет только нужный набор файлов', async () => {
