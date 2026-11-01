@@ -96,6 +96,7 @@ const state = {
   settings: null,
   view: storedView(),
   month: '',
+  monthFollowsCurrent: true,
   includeOpeningBalances: false,
   overviewDirection: 'expense',
   operationMonth: '',
@@ -330,7 +331,7 @@ async function loadData({ automatic = false } = {}) {
   state.data = data;
   state.settings = settings;
   restoreUpdateNotice();
-  state.month ||= data.summaryMonth || localIsoDate().slice(0, 7);
+  if (!state.month || state.monthFollowsCurrent) state.month = localIsoDate().slice(0, 7);
   state.operationMonth ||= localIsoDate().slice(0, 7);
   document.querySelector('#workbook-name').textContent = data.workbook;
   document.querySelector('#workbook-name').dataset.asOfDate = data.asOfDate;
@@ -400,7 +401,7 @@ function totals(operations) {
 }
 
 function pageHeader(title, subtitle, withMonth = false) {
-  return `<div class="page-head"><div><div class="eyebrow">${esc(subtitle)}</div><h1>${esc(title)}</h1></div>${withMonth ? `<label class="month-control"><span>Период</span><input id="month-picker" type="month" value="${state.month}"></label>` : ''}</div>`;
+  return `<div class="page-head"><div><div class="eyebrow">${esc(subtitle)}</div><h1>${esc(title)}</h1></div>${withMonth ? `<label class="month-control"><span>${translate('Период')}</span><input id="month-picker" type="month" value="${state.month}"></label>` : ''}</div>`;
 }
 
 function renderOverview() {
@@ -1176,6 +1177,16 @@ async function updateRateUi(fetchRate = true) {
 }
 
 document.addEventListener('click', async (event) => {
+  const monthControl = event.target.closest?.('.month-control');
+  if (monthControl) {
+    event.preventDefault();
+    const monthPicker = monthControl.querySelector('#month-picker');
+    try {
+      if (typeof monthPicker?.showPicker === 'function') monthPicker.showPicker();
+      else monthPicker?.focus();
+    } catch { monthPicker?.focus(); }
+    return;
+  }
   if (event.target.closest('#topbar-update-notice')) {
     if (draftDirty && !ask('Перейти к обновлению? Несохранённая форма будет закрыта.')) return;
     navigateTo('settings');
@@ -1586,7 +1597,12 @@ content.addEventListener('change', async (event) => {
       }
     }
   }
-  if (event.target.id === 'month-picker') { state.month = event.target.value; render(); }
+  if (event.target.id === 'month-picker') {
+    const currentMonth = localIsoDate().slice(0, 7);
+    state.month = event.target.value || currentMonth;
+    state.monthFollowsCurrent = state.month === currentMonth;
+    render();
+  }
   if (event.target.id === 'operation-month') { state.operationMonth = event.target.value; state.dateFrom = ''; state.dateTo = ''; renderOperations(); }
   if (event.target.id === 'operation-date-from' || event.target.id === 'operation-date-to') {
     state.operationMonth = '';

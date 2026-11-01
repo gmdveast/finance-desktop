@@ -2,7 +2,7 @@
 
 Finance is a local Windows app for managing personal finances in an Excel workbook. It can receive transactions from your phone through Obsidian and Syncthing.
 
-Current version: **1.2.2**. The desktop app and first-run setup are available in English and Russian; choose a language in Settings. In 1.2.2, transaction time appears above the date, the update notice aligns with the selected navigation tab, and dates fit in the Overview table.
+Current version: **1.3.3**. The desktop app and first-run setup are available in English and Russian; choose a language in Settings. In 1.3.3, the Overview defaults to the current month, the full period control opens the month picker, and the Finance icon appears in the browser tab.
 
 ## Installation
 

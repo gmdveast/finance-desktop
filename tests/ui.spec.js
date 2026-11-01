@@ -1085,7 +1085,7 @@ scenario('выбранный экран сохраняется при перез
   await expect(page.getByRole('heading', { name: 'Счета и остатки' })).toBeVisible();
 });
 
-scenario('обзор корректно объясняет расходы без доходов', async ({ page }) => {
+scenario('обзор корректно объясняет расходы без доходов', async ({ page, request }) => {
   const expenses = [
     ['Жильё', 700.5, 'Обязательная'],
     ['Продукты', 600, 'Обязательная'],
@@ -1110,6 +1110,29 @@ scenario('обзор корректно объясняет расходы без
     body: JSON.stringify({ workbook: 'overview-test.xlsx', summaryMonth: '2026-01', operations, balances: [{ id: 5, rubAmount: 3500 }], lists: {} }),
   }));
   await page.goto('/');
+  await expect(page.locator('link[rel="icon"]')).toHaveAttribute('href', '/assets/finance-icon.png');
+  expect((await request.get('/assets/finance-icon.png')).ok()).toBeTruthy();
+  await expect(page.locator('#month-picker')).toHaveValue('2026-10');
+
+  await page.evaluate(() => {
+    window.monthPickerOpenCount = 0;
+    HTMLInputElement.prototype.showPicker = function () {
+      if (this.id === 'month-picker') window.monthPickerOpenCount += 1;
+    };
+  });
+  const monthControl = await page.locator('.month-control').boundingBox();
+  await page.mouse.click(monthControl.x + 2, monthControl.y + monthControl.height / 2);
+  await page.mouse.click(monthControl.x + monthControl.width - 2, monthControl.y + monthControl.height / 2);
+  await expect.poll(() => page.evaluate(() => window.monthPickerOpenCount)).toBe(2);
+
+  await page.clock.setFixedTime(new Date('2026-11-01T09:00:00.000Z'));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('#month-picker')).toHaveValue('2026-11');
+  await page.locator('#month-picker').fill('2026-01');
+  await page.locator('h1').click();
+  await page.clock.setFixedTime(new Date('2026-12-01T09:00:00.000Z'));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('#month-picker')).toHaveValue('2026-01');
 
   await expect(page.locator('[data-action="add-operation"]')).toBeVisible();
   await page.locator('.nav-item[data-view="settings"]').click();
