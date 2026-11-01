@@ -680,6 +680,15 @@ test('панель общих балансов отображает синхро
   assert.match(renderedText(panel), /1 234,5 RUB/);
   assert.match(renderedText(panel), /Общий итог/);
   assert.match(renderedText(panel), /2 034,5 RUB/);
+  assert.match(renderedText(panel), /Данные на 16 октября 2026/);
+
+  plugin.settings.language = 'en';
+  plugin.refreshBalancePanels();
+  assert.match(renderedText(panel), /Data as of Oct 16, 2026/);
+  assert.match(renderedText(panel), /snapshot created Oct 16, 2026/);
+  assert.doesNotMatch(renderedText(panel), /snapshot created 10\/16\/26/);
+  plugin.settings.language = 'ru';
+  plugin.refreshBalancePanels();
 
   snapshot.accounts[1].balance = 11;
   snapshot.accounts[1].rubAmount = 880;
