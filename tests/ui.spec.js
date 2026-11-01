@@ -13,7 +13,7 @@ async function untranslatedUiText(page, locale = 'en') {
   return page.evaluate(({ locale, englishPhrases }) => {
     const preserved = '[data-locale-preserve], .operation-note, .operation-category-label, .account-route, .account-name, .category-name, .setting-value, code';
     const hasCyrillic = (value) => /[\u0400-\u04FF]/u.test(value);
-    const allowedEnglishWords = /\b(?:Finance|Capture|Sync|Obsidian|Syncthing|GitHub|BRAT|RUB|USD|GEL|API|CSV|XML|JSON|CBR|SHA|URL|ID)\b/giu;
+    const allowedEnglishWords = /\b(?:Finance|Capture|Sync|Obsidian|Syncthing|GitHub|RUB|USD|GEL|API|CSV|XML|JSON|CBR|SHA|URL|ID)\b/giu;
     const normalizeEnglish = (value) => value
       .replace(allowedEnglishWords, ' ')
       .replace(/\{[^}]+\}/gu, ' ')
@@ -51,7 +51,7 @@ test.beforeEach(async ({ page }) => {
   await page.clock.setFixedTime(new Date(TEST_INSTANT));
 });
 
-scenario('настройки отдельно показывают обновление desktop и Finance Capture через BRAT', async ({ page }) => {
+scenario('настройки отдельно показывают обновление desktop и Finance Capture через Obsidian', async ({ page }) => {
   await page.route('**/api/updates/check', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -71,8 +71,10 @@ scenario('настройки отдельно показывают обновл�
   }));
   await page.goto('/#settings');
   await expect(page.getByRole('heading', { name: 'Обновление Finance' })).toBeVisible();
-  await expect(page.locator('.update-plugin-note')).toContainText('Finance Capture обновляется отдельно');
-  await expect(page.locator('.update-plugin-note')).toContainText('Эта проверка desktop не меняет версию плагина');
+  await expect(page.locator('.update-plugin-note')).toContainText('Finance Capture обновляется отдельно в Obsidian');
+  await expect(page.locator('.update-plugin-note')).toContainText('Проверить обновления');
+  await expect(page.locator('.update-plugin-note')).not.toContainText('BRAT');
+  await expect(page.locator('.update-plugin-note a')).toHaveAttribute('href', 'https://community.obsidian.md/plugins/finance-capture');
   const topbarUpdate = page.locator('#topbar-update-notice');
   await page.locator('[data-check-update]').click();
   await expect(page.getByText('Доступна версия 1.0.0-beta.2 (beta).')).toBeVisible();
@@ -523,6 +525,9 @@ scenario('подключение телефона необязательно и 
   expect(settings.mobileLists.accountCount).toBeGreaterThan(0);
 
   await page.goto('/#phone');
+  await expect(page.locator('.phone-guide')).toContainText('Установите Finance Capture из каталога Obsidian');
+  await expect(page.locator('.phone-guide')).not.toContainText('BRAT');
+  await expect(page.locator('.phone-guide a[href="https://community.obsidian.md/plugins/finance-capture"]')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Подключить телефон' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'На компьютере подготовлены счета' })).toBeVisible();
   await expect(page.getByText('Подключение телефона можно завершить позже. Принятые с телефона операции импортируются в книгу только на этом компьютере.')).toBeVisible();
@@ -1032,6 +1037,22 @@ scenario('операции фильтруются и сортируются по
       return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     });
     await expect(page.locator('#operation-month')).toHaveValue(browserMonth);
+    await page.evaluate(() => {
+      window.openedPickerIds = [];
+      HTMLInputElement.prototype.showPicker = function () { window.openedPickerIds.push(this.id); };
+    });
+    for (const id of ['operation-month', 'operation-date-from', 'operation-date-to']) {
+      const field = page.locator(`#${id}`).locator('xpath=..');
+      await expect(field).toHaveCSS('cursor', 'pointer');
+      await field.locator('span').click();
+      const fieldBox = await field.boundingBox();
+      await page.mouse.click(fieldBox.x + fieldBox.width - 3, fieldBox.y + 3);
+    }
+    await expect.poll(() => page.evaluate(() => window.openedPickerIds)).toEqual([
+      'operation-month', 'operation-month',
+      'operation-date-from', 'operation-date-from',
+      'operation-date-to', 'operation-date-to',
+    ]);
     await expect(page.getByRole('columnheader', { name: 'Тип' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: 'Необходимость' })).toBeVisible();
     const row = page.locator(`[data-operation-row="${flexible}"]`);
@@ -1124,6 +1145,11 @@ scenario('обзор корректно объясняет расходы без
   await page.mouse.click(monthControl.x + 2, monthControl.y + monthControl.height / 2);
   await page.mouse.click(monthControl.x + monthControl.width - 2, monthControl.y + monthControl.height / 2);
   await expect.poll(() => page.evaluate(() => window.monthPickerOpenCount)).toBe(2);
+  await page.locator('#month-picker').focus();
+  await expect(page.locator('.month-control')).toHaveCSS('outline-style', 'none');
+  await expect(page.locator('.month-control')).toHaveCSS('user-select', 'none');
+  await expect(page.locator('#month-picker')).toHaveCSS('user-select', 'none');
+  await page.locator('#month-picker').evaluate((input) => input.blur());
 
   await page.clock.setFixedTime(new Date('2026-11-01T09:00:00.000Z'));
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));

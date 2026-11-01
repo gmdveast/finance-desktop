@@ -608,9 +608,9 @@ function renderOperations() {
   content.innerHTML = `${pageHeader('Операции', `${allRows.length} записей в Excel`)}
     <div class="operation-filters"><div class="operation-filter-row">
       <label class="filter-field search-field"><span>Поиск</span><input class="search" id="operation-search" value="${esc(state.search)}" placeholder="Заметка, категория или счёт"></label>
-      <label class="filter-field"><span>Месяц</span><input id="operation-month" type="month" value="${state.operationMonth}"></label>
-      <label class="filter-field"><span>С даты</span><input id="operation-date-from" type="date" value="${state.dateFrom}"></label>
-      <label class="filter-field"><span>По дату</span><input id="operation-date-to" type="date" value="${state.dateTo}"></label>
+      <label class="filter-field picker-filter-field"><span>Месяц</span><input id="operation-month" type="month" value="${state.operationMonth}"></label>
+      <label class="filter-field picker-filter-field"><span>С даты</span><input id="operation-date-from" type="date" value="${state.dateFrom}"></label>
+      <label class="filter-field picker-filter-field"><span>По дату</span><input id="operation-date-to" type="date" value="${state.dateTo}"></label>
       <label class="filter-field"><span>Тип</span><select id="operation-type"><option value="Все">${translate('Все типы')}</option>${['Расход', 'Доход', 'Перевод', 'Инвестиция'].map((type) => `<option value="${type}" ${state.operationType === type ? 'selected' : ''}>${typeLabel(type)}</option>`).join('')}</select></label>
       <label class="filter-field"><span>Категория</span><select id="operation-category"><option value="">${translate('Все категории')}</option>${[true, false].map((used) => `<optgroup label="${used ? 'Есть операции за выбранный период' : 'Нет операций за выбранный период'}">${categories.filter((item) => usedCategories.has(item.name) === used).map((item) => `<option data-locale-preserve value="${esc(item.name)}" ${state.operationCategory === item.name ? 'selected' : ''}>${esc(item.emoji ? `${item.emoji} ${item.name}` : item.name)}</option>`).join('')}</optgroup>`).join('')}</select></label>
       <label class="filter-field"><span>Счёт</span><select id="operation-account"><option value="">${translate('Все счета')}</option>${accounts().map((item) => `<option data-locale-preserve value="${item.id}" ${String(item.id) === state.operationAccount ? 'selected' : ''}>${esc(item.name)}</option>`).join('')}</select></label>
@@ -947,13 +947,21 @@ function renderPhoneSetup() {
         <progress class="phone-progress" max="3" value="${checkedCount}" aria-label="Отмечено шагов подключения"></progress>
         <label class="phone-check"><input type="checkbox" data-phone-check="syncthing" ${checks.syncthing === true ? 'checked' : ''}><span><strong>Syncthing работает на компьютере и телефоне</strong><small>Добавьте устройства и разрешите им синхронизировать одну папку.</small></span></label>
         <label class="phone-check"><input type="checkbox" data-phone-check="vault" ${checks.vault === true ? 'checked' : ''}><span><strong>Папка Finance Sync появилась внутри хранилища Obsidian</strong><small>Имя общей папки должно быть Finance Sync. На компьютере ей соответствует путь из диагностики.</small></span></label>
-        <label class="phone-check"><input type="checkbox" data-phone-check="plugin" ${checks.plugin === true ? 'checked' : ''}><span><strong>Finance Capture установлен и включён</strong><small>Плагин нужен для создания операций в Obsidian; BRAT доставляет только плагин.</small></span></label>
+        <label class="phone-check"><input type="checkbox" data-phone-check="plugin" ${checks.plugin === true ? 'checked' : ''}><span><strong>Finance Capture установлен и включён</strong><small>Finance Capture устанавливается из каталога Community plugins и нужен для создания операций в Obsidian.</small></span></label>
       </article>
     </div>
     <article class="card phone-guide" id="phone-guide"><div class="card-head"><div><h2>Краткая инструкция</h2><p>Синхронизация переносит файлы, Finance на компьютере записывает принятые операции в Excel.</p></div></div>
       <div class="phone-guide-steps">
         <section><span class="phone-guide-number">01</span><div><h3>Подключите Syncthing</h3><ol class="phone-guide-list"><li>Запустите Syncthing на компьютере и телефоне, затем свяжите устройства.</li><li>На компьютере добавьте общую папку с меткой <strong>Finance Sync</strong>, укажите путь из диагностики выше и разрешите доступ телефону.</li><li>На телефоне примите папку и выберите расположение <strong>Finance Sync</strong> внутри хранилища Obsidian.</li></ol><a href="https://docs.syncthing.net/intro/gui.html" target="_blank" rel="noopener">Официальная инструкция Syncthing</a></div></section>
-        <section><span class="phone-guide-number">02</span><div><h3>Установите beta-плагин через BRAT</h3><ol class="phone-guide-list"><li>В Obsidian установите и включите BRAT.</li><li>В BRAT добавьте beta-плагин по идентификатору ниже и установите доступный beta-релиз.</li><li>Включите <strong>Finance Capture</strong>. После синхронизации в форме должны появиться счета.</li></ol><div class="phone-repo-copy"><code>gmdveast/finance-capture</code><button class="secondary-button" type="button" data-copy-repo>Скопировать идентификатор</button></div><a href="https://github.com/TfTHacker/obsidian42-brat" target="_blank" rel="noopener">BRAT на GitHub</a></div></section>
+        <section><span class="phone-guide-number">02</span><div>
+          <h3>Установите Finance Capture из каталога Obsidian</h3>
+          <ol class="phone-guide-list">
+            <li>В Obsidian откройте Настройки → Сторонние плагины → Обзор (Community plugins → Browse). Если включён ограниченный режим, сначала разрешите плагины сообщества.</li>
+            <li>Найдите Finance Capture, выберите Установить, затем Включить.</li>
+            <li>В настройках Finance Capture укажите папку Finance Sync внутри хранилища. После синхронизации в форме должны появиться счета.</li>
+          </ol>
+          <a href="https://community.obsidian.md/plugins/finance-capture" target="_blank" rel="noopener">Открыть Finance Capture в каталоге Obsidian</a>
+        </div></section>
       </div>
     </article>`;
 }
@@ -1017,7 +1025,7 @@ function renderSettings() {
       <article class="card settings-card settings-update-card"><div class="card-head"><div><h2>Обновление Finance</h2><p>${updateDescription}</p></div></div>
         ${settingRow('Текущая версия', updates.version || 'неизвестна')}${settingRow('Канал', channelLabel)}
         ${updateResult}
-        <p class="update-plugin-note">Finance Capture обновляется отдельно: в Obsidian через BRAT запустите обновление beta-плагинов. Эта проверка desktop не меняет версию плагина. <a href="https://github.com/TfTHacker/obsidian42-brat" target="_blank" rel="noopener">BRAT</a> · <a href="https://github.com/gmdveast/finance-capture" target="_blank" rel="noopener">Finance Capture</a>.</p>
+        <p class="update-plugin-note">Finance Capture обновляется отдельно в Obsidian: откройте Настройки → Сторонние плагины, выберите Проверить обновления, затем Обновить рядом с Finance Capture. Проверка обновлений Finance не меняет версию плагина. <a href="https://community.obsidian.md/plugins/finance-capture" target="_blank" rel="noopener">Finance Capture в каталоге Community plugins</a>.</p>
         <div class="settings-actions settings-actions-wrap"><button class="secondary-button" type="button" data-check-update ${state.updateChecking ? 'disabled' : ''}>Проверить обновления</button>${updates.rollbackVersion ? `<button class="danger-button" type="button" data-rollback-version="${esc(updates.rollbackVersion)}">Вернуть ${esc(rollbackLabel)}</button>` : ''}</div>
       </article>
       <article class="card settings-card reset-settings"><h2>Очистка данных</h2>${state.data.syncBlocked ? '<p class="reference-note">Импорт и выдача новых ID заблокированы: после восстановления требуется достоверный реестр синхронизации. Входящие файлы сохраняются.</p>' : ''}<p>Перед очисткой создаётся бэкап Excel. Мобильная очередь и связанные карточки также удаляются. Бэкапы и справочники сохраняются.</p><div class="settings-actions settings-actions-wrap"><button type="button" class="danger-button" data-clear-data="history">Удалить историю</button><button type="button" class="danger-button" data-clear-data="all">Полная очистка</button></div></article>
@@ -1177,14 +1185,14 @@ async function updateRateUi(fetchRate = true) {
 }
 
 document.addEventListener('click', async (event) => {
-  const monthControl = event.target.closest?.('.month-control');
-  if (monthControl) {
+  const pickerControl = event.target.closest?.('.month-control, .picker-filter-field');
+  const nativePicker = pickerControl?.querySelector('input[type="month"], input[type="date"]');
+  if (nativePicker) {
     event.preventDefault();
-    const monthPicker = monthControl.querySelector('#month-picker');
     try {
-      if (typeof monthPicker?.showPicker === 'function') monthPicker.showPicker();
-      else monthPicker?.focus();
-    } catch { monthPicker?.focus(); }
+      if (typeof nativePicker.showPicker === 'function') nativePicker.showPicker();
+      else nativePicker.focus();
+    } catch { nativePicker.focus(); }
     return;
   }
   if (event.target.closest('#topbar-update-notice')) {
@@ -1400,11 +1408,6 @@ document.addEventListener('click', async (event) => {
   }
   if (event.target.closest('[data-phone-later]')) { navigateTo('overview'); return; }
   if (event.target.closest('[data-phone-instructions]')) { document.querySelector('#phone-guide')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
-  if (event.target.closest('[data-copy-repo]')) {
-    try { await navigator.clipboard.writeText('gmdveast/finance-capture'); notify('Идентификатор репозитория скопирован.'); }
-    catch { notify('Не удалось скопировать. Выделите идентификатор и скопируйте вручную.', 'error'); }
-    return;
-  }
   if (event.target.closest('[data-action="add-operation"]')) { openOperation(); return; }
   if (event.target.closest('[data-action="close-dialog"]')) { dialog.close(); return; }
   const publishMobile = event.target.closest('[data-publish-mobile]');

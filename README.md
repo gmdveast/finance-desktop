@@ -2,7 +2,7 @@
 
 Finance is a local Windows app for managing personal finances in an Excel workbook. It can receive transactions from your phone through Obsidian and Syncthing.
 
-Current version: **1.3.3**. The desktop app and first-run setup are available in English and Russian; choose a language in Settings. In 1.3.3, the Overview defaults to the current month, the full period control opens the month picker, and the Finance icon appears in the browser tab.
+Current version: **1.3.4**. The desktop app and first-run setup are available in English and Russian; choose a language in Settings. Finance Capture is installed and updated through Obsidian Community plugins.
 
 ## Installation
 
@@ -30,9 +30,9 @@ Finance must be the only app writing to your active workbook. Do not edit it in 
 
 ## Optional phone setup
 
-Mobile capture requires Obsidian Mobile and Syncthing. In Finance, open **Connect phone** for setup steps and the `Finance Sync` folder. In Obsidian, install BRAT, add the [Finance Capture plugin repository](https://github.com/gmdveast/finance-capture), install the latest available version, and enable the plugin. When your computer is on and the folders are synced, Finance imports queued transactions into the workbook.
+Mobile capture requires Obsidian Mobile and Syncthing. In Finance, open **Connect phone** for setup steps and the `Finance Sync` folder. In Obsidian, open **Settings → Community plugins → Browse**, search for **Finance Capture**, install it, and enable it. You can also open the [Finance Capture Community plugins listing](https://community.obsidian.md/plugins/finance-capture). When your computer is on and the folders are synced, Finance imports queued transactions into the workbook.
 
-The installed desktop app checks for updates on startup. View the status or check manually under **Settings → Finance updates**. Downloads and installation begin only after you confirm. The Obsidian plugin is updated separately through BRAT. You can roll back the desktop app from Settings.
+The installed desktop app checks for updates on startup. View the status or check manually under **Settings → Finance updates**. Downloads and installation begin only after you confirm. Update Finance Capture separately in Obsidian under **Settings → Community plugins → Check for updates**. You can roll back the desktop app from Settings.
 
 ## Privacy and support
 

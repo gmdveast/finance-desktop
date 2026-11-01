@@ -94,10 +94,10 @@ button { cursor: pointer; }
 .page-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 28px; }
 .page-head h1 { font-family: Unbounded, sans-serif; font-size: clamp(26px, 3vw, 40px); line-height: 1.1; margin: 7px 0 0; letter-spacing: -.04em; }
 .page-head p { color: var(--muted); margin: 8px 0 0; font-size: 13px; }
-.month-control { display: flex; align-items: center; gap: 10px; min-height: 44px; background: var(--card); border: 1px solid var(--line); padding: 6px 10px 6px 15px; border-radius: 14px; cursor: pointer; }
-.month-control:focus-within { outline: 3px solid var(--lime); outline-offset: 2px; }
+.month-control { display: flex; align-items: center; gap: 10px; min-height: 44px; background: var(--card); border: 1px solid var(--line); padding: 6px 10px 6px 15px; border-radius: 14px; cursor: pointer; user-select: none; -webkit-user-select: none; }
+.month-control:focus-within { outline: none; }
 .month-control span { font-size: 12px; color: var(--muted); font-weight: 700; }
-.month-control input { min-height: 38px; border: 0; background: transparent; color: var(--ink); font-weight: 800; outline: none; cursor: pointer; }
+.month-control input { min-height: 38px; border: 0; background: transparent; color: var(--ink); font-weight: 800; outline: none; cursor: pointer; user-select: none; -webkit-user-select: none; caret-color: transparent; }
 
 .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 18px; }
 .metric { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 20px; min-height: 132px; display: flex; flex-direction: column; justify-content: space-between; position: relative; overflow: hidden; }
@@ -164,6 +164,8 @@ button { cursor: pointer; }
 .operation-filters { display: grid; gap: 9px; margin-bottom: 16px; }
 .operation-filter-row { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
 .filter-field { display: grid; flex: 1 1 145px; gap: 6px; min-width: 130px; }
+.picker-filter-field { cursor: pointer; }
+.picker-filter-field input { cursor: pointer; }
 .filter-field > span { color: var(--muted); font-size: 10px; font-weight: 800; }
 .filter-field input, .filter-field select { width: 100%; min-width: 0; min-height: 41px; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--line); border-radius: 11px; outline: none; background: var(--card); color: var(--ink); font: inherit; font-size: 12px; }
 .filter-field input:focus, .filter-field select:focus { border-color: var(--forest-2); box-shadow: 0 0 0 3px rgba(44, 75, 62, .1); }
@@ -415,9 +417,6 @@ input[name="destinationAmount"][readonly], #investment-category-label[readonly] 
 .phone-guide-list { margin: 0 0 10px; padding-left: 18px; color: var(--muted); font-size: 11px; line-height: 1.7; }
 .phone-guide-list li + li { margin-top: 6px; }
 .phone-guide-steps a { color: #315f4b; font-size: 11px; font-weight: 800; }
-.phone-repo-copy { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
-.phone-repo-copy code { padding: 8px 10px; border-radius: 8px; background: #f0f1eb; color: var(--ink); font-size: 11px; }
-.phone-repo-copy .secondary-button { padding: 8px 10px; font-size: 10px; }
 .danger-button { border: 0; border-radius: 12px; padding: 12px 18px; background: #a54132; color: white; font-weight: 800; }
 .danger-button:hover { background: #8f3428; }
 .danger-button:disabled { opacity: .55; cursor: wait; }
