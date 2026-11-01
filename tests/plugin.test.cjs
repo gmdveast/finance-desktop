@@ -178,6 +178,34 @@ test('localization: locale detection, dictionaries, amounts, dates and plural fo
   assert.match(PluginClass.operationCount(2, 'ru'), /2 операции$/);
 });
 
+test('localization: amount stays the same when the display locale changes', () => {
+  const { PluginClass } = loadPlugin();
+  let storedAmount = '';
+  const makeAmountField = (locale) => {
+    const field = {
+      inputEl: {},
+      setValue(value) { this.value = value; return this; },
+      onChange(handler) { this.change = handler; return this; },
+    };
+    PluginClass.configureAmountInput(field, storedAmount, (value) => { storedAmount = value; }, locale);
+    return field;
+  };
+
+  const russian = makeAmountField('ru');
+  assert.equal(russian.value, '');
+  russian.change('1.234.567,89');
+  assert.equal(storedAmount, '1234567.89');
+
+  const english = makeAmountField('en');
+  assert.equal(english.value, '1,234,567.89');
+  english.change(english.value);
+  assert.equal(storedAmount, '1234567.89');
+
+  const russianAgain = makeAmountField('ru');
+  assert.equal(russianAgain.value, '1.234.567,89');
+  assert.equal(PluginClass.parseCanonicalAmountInputValue(storedAmount), 1234567.89);
+});
+
 test('localization: English UI and cards preserve the canonical operation contract', async () => {
   const { PluginClass } = loadPlugin();
   const vault = new FakeVault();
