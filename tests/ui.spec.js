@@ -1711,62 +1711,156 @@ scenario('lifecycle: closing the whole browser stops Finance by pagehide or the 
   }
 });
 
-scenario('обзор включает начальный баланс только по переключателю', async ({ page, request }) => {
+scenario('opening snapshot is shown separately and does not count as a transaction', async ({ page, request }) => {
   const data = await (await request.get('/api/data')).json();
-  await request.put('/api/operations/opening-balance', { data: { accountId: data.accounts[0].id, amount: 1234, date: '2026-10-03' } });
+  const account = data.accounts[0];
+  await request.put('/api/operations/opening-balance', { data: { accountId: account.id, amount: 1234, date: '2026-10-03' } });
+  const expenseCategory = data.lists.categories.find((item) => item.type === 'Расход');
+  const expenseResponse = await request.post('/api/operations', { data: {
+    date: '2026-10-10', type: expenseCategory.type, category: expenseCategory.name, amount: 10,
+    currency: account.currency, rate: 6, necessity: data.lists.necessities[0], accountId: account.id,
+  } });
+  expect(expenseResponse.status()).toBe(201);
   await page.goto('/#overview');
   const income = page.locator('[data-overview-metric="income"] .metric-value');
   const before = await income.textContent();
+  const operationsBefore = data.operations.length + 1;
+  const snapshotResponse = page.waitForResponse((response) => response.url().endsWith('/api/monthly-snapshots/ensure'));
   await page.locator('#overview-opening-toggle').check();
-  await expect(income).not.toHaveText(before);
-  await page.locator('#overview-direction').selectOption('income');
-  await expect(page.locator('.category-list')).toContainText('Начальный баланс');
-  await page.locator('#overview-opening-toggle').uncheck();
-  await expect(income).toHaveText(before);
-  await expect(page.locator('.category-list')).not.toContainText('Начальный баланс');
-});
-
-scenario('ноябрьский начальный баланс входит в выбранный месяц и график только по переключателю', async ({ page, request }) => {
-  const before = await (await request.get('/api/data')).json();
-  const usd = before.accounts.find((account) => account.currency === 'USD');
-  await request.put('/api/operations/opening-balance', { data: { accountId: usd.id, amount: 1234, date: '2026-11-05' } });
-  const saved = await (await request.get('/api/data')).json();
-  const expectedIncome = 1234 * saved.openingBalances.find((item) => item.accountId === usd.id).rate;
-  const operationsCount = saved.operations.length;
-  const balances = saved.accounts.map(({ id, calculatedBalance }) => [id, calculatedBalance]);
+  const snapshotData = await (await snapshotResponse).json();
+  const snapshot = snapshotData.data.monthlySnapshots['2026-10'];
+  const openingValue = 1234 * snapshot.accounts.find((item) => item.accountId === account.id).rate;
   const numericValue = (text) => {
     const raw = text.replace(/[^\d,.-]/gu, '');
     return Number(raw.includes('.') ? raw.replaceAll(',', '') : raw.replace(',', '.'));
   };
+  await expect(income).not.toHaveText(before);
+  await expect.poll(async () => numericValue(await income.textContent())).toBe(openingValue);
+  await expect.poll(async () => numericValue(await page.locator('[data-overview-metric="expense"] .metric-value').textContent())).toBe(60);
+  await expect.poll(async () => numericValue(await page.locator('[data-overview-metric="result"] .metric-value').textContent())).toBe(openingValue - 60);
+  await expect(page.locator('[data-overview-metric="income"] .metric-note')).toContainText('Фактический доход');
+  await expect(page.locator('[data-overview-metric="income"] .metric-note')).toContainText('Остаток на начало');
+  await page.locator('#overview-direction').selectOption('income');
+  await expect(page.locator('.category-list')).toContainText('Начальный остаток');
+  await expect(page.locator('#overview-opening-toggle')).toBeChecked();
+  await page.locator('#overview-opening-toggle').uncheck();
+  await expect(income).toHaveText(before);
+  const after = await (await request.get('/api/data')).json();
+  expect(after.operations).toHaveLength(operationsBefore);
+  expect(after.accounts.find((item) => item.id === account.id).calculatedBalance).toBe(1224);
+});
+
+scenario('opening snapshot status identifies a fallback CBR bulletin', async ({ page, request }) => {
+  const data = await (await request.get('/api/data')).json();
+  const account = data.accounts[0];
+  await request.put('/api/operations/opening-balance', { data: { accountId: account.id, amount: 1234, date: '2026-10-03' } });
+  await page.route('**/api/monthly-snapshots/ensure', async (route) => {
+    const response = await route.fetch();
+    const payload = await response.json();
+    for (const item of payload.data.monthlySnapshots['2026-10'].accounts) {
+      item.rateEffectiveDate = '2026-09-30';
+      item.fallback = true;
+    }
+    await route.fulfill({ response, body: JSON.stringify(payload) });
+  });
+  await page.goto('/#overview');
+  const snapshotResponse = page.waitForResponse((response) => response.url().endsWith('/api/monthly-snapshots/ensure'));
+  await page.locator('#overview-opening-toggle').check();
+  await snapshotResponse;
+  await expect(page.locator('.snapshot-status')).toContainText('2026-09-30');
+  await expect(page.locator('.snapshot-status')).toContainText(/nearest earlier bulletin|предыдущий бюллетень/u);
+});
+
+scenario('future overview months use the live current-month result as opening balance', async ({ page, request }) => {
+  const before = await (await request.get('/api/data')).json();
+  const account = before.accounts.find((item) => item.currency === 'RUB') || before.accounts[0];
+  const currentMonth = before.asOfDate.slice(0, 7);
+  const currentDate = `${currentMonth}-10`;
+  await request.put('/api/operations/opening-balance', { data: { accountId: account.id, amount: 1234, date: `${currentMonth}-03` } });
+  const incomeCategory = before.lists.categories.find((item) => item.type === 'Доход').name;
+  const expenseCategory = before.lists.categories.find((item) => item.type === 'Расход').name;
+  const expenseResponse = await request.post('/api/operations', { data: {
+    date: currentDate, type: 'Расход', category: expenseCategory, amount: 30,
+    currency: account.currency, rate: account.currency === 'RUB' ? 1 : account.rate, necessity: before.lists.necessities[0], accountId: account.id,
+  } });
+  expect(expenseResponse.status()).toBe(201);
+  const incomeResponse = await request.post('/api/operations', { data: {
+    date: currentDate, type: 'Доход', category: incomeCategory, amount: 20,
+    currency: account.currency, rate: account.currency === 'RUB' ? 1 : account.rate, accountId: account.id,
+  } });
+  expect(incomeResponse.status()).toBe(201);
+  const afterOperations = await (await request.get('/api/data')).json();
+  const currentOperations = afterOperations.operations.filter((item) => item.date.startsWith(currentMonth));
+  const actualIncome = currentOperations.filter((item) => item.type === 'Доход').reduce((sum, item) => sum + item.rubAmount, 0);
+  const actualExpense = currentOperations.filter((item) => ['Расход', 'Инвестиция'].includes(item.type)).reduce((sum, item) => sum + item.rubAmount, 0);
+  const operationsCount = afterOperations.operations.length;
+  const calculatedBalance = afterOperations.accounts.find((item) => item.id === account.id).calculatedBalance;
+  const numericValue = (text) => {
+    const raw = text.replace(/[^\d,.-]/gu, '');
+    return Number(raw.includes('.') ? raw.replaceAll(',', '') : raw.replace(',', '.'));
+  };
+  const nextMonth = (month, offset = 1) => {
+    const date = new Date(`${month}-01T12:00:00`);
+    date.setMonth(date.getMonth() + offset);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  };
+  let ensureCalls = 0;
+  await page.route('**/api/monthly-snapshots/ensure', async (route) => {
+    ensureCalls += 1;
+    await page.waitForTimeout(250);
+    await route.continue();
+  });
 
   await page.goto('/#overview');
   const month = page.locator('#month-picker');
-  await month.fill('2026-11');
-  await expect(month).toHaveValue('2026-11');
-  await page.locator('#overview-direction').selectOption('income');
-  const income = page.locator('[data-overview-metric="income"] .metric-value');
-  await expect.poll(async () => numericValue(await income.textContent())).toBe(0);
+  const futureMonth = nextMonth(currentMonth);
+  await month.fill(futureMonth);
+  await expect(month).toHaveValue(futureMonth);
+  const snapshotResponse = page.waitForResponse((response) => response.url().endsWith('/api/monthly-snapshots/ensure'));
   await page.locator('#overview-opening-toggle').check();
-  expect(numericValue(await income.textContent())).toBeCloseTo(expectedIncome, 2);
-  expect(numericValue(await page.locator('[data-overview-metric="result"] .metric-value').textContent())).toBeCloseTo(expectedIncome, 2);
-  await expect(page.locator('.category-list')).toContainText('Начальный баланс');
-  const novemberBar = page.locator('.chart-group').last();
-  expect(await novemberBar.locator('.bar').first().evaluate((bar) => Number.parseFloat(bar.style.height))).toBeGreaterThan(0);
+  await expect(page.locator('.snapshot-status')).toContainText('Подготавливаем снимок');
+  const snapshotData = await (await snapshotResponse).json();
+  const openingValue = 1234 * snapshotData.data.monthlySnapshots[currentMonth].accounts.find((item) => item.accountId === account.id).rate;
+  const currentMonthResult = openingValue + actualIncome - actualExpense;
+  const income = page.locator('[data-overview-metric="income"] .metric-value');
+  await expect.poll(async () => numericValue(await income.textContent())).toBe(currentMonthResult);
+  await expect.poll(async () => numericValue(await page.locator('[data-overview-metric="result"] .metric-value').textContent())).toBe(currentMonthResult);
+  await expect(page.locator('.snapshot-status')).toContainText('обновляется при изменении его операций');
 
-  await month.fill('2026-12');
-  await expect.poll(async () => numericValue(await income.textContent())).toBe(0);
-  await month.fill('2026-10');
-  await expect.poll(async () => numericValue(await income.textContent())).toBe(0);
-  await month.fill('2026-11');
+  await month.fill(nextMonth(currentMonth, 2));
+  await expect.poll(async () => numericValue(await income.textContent())).toBe(currentMonthResult);
+  await month.fill(currentMonth);
+  await expect.poll(async () => numericValue(await page.locator('[data-overview-metric="result"] .metric-value').textContent())).toBe(currentMonthResult);
+
+  await month.fill(futureMonth);
+  await page.locator('[data-action="add-operation"]').click();
+  const form = page.locator('#operation-form');
+  await form.locator('input[name="type"][value="Доход"]').check();
+  await form.locator('[name="date"]').fill(`${currentMonth}-15`);
+  await form.locator('[name="accountId"]').selectOption(String(account.id));
+  await form.locator('[name="category"]').selectOption(incomeCategory);
+  await form.locator('[name="amount"]').fill('5');
+  const addedResponse = page.waitForResponse((response) => response.url().endsWith('/api/operations') && response.request().method() === 'POST');
+  await page.locator('#save-operation').click();
+  const addedPayload = await (await addedResponse).json();
+  expect(addedPayload.result.id).toBeGreaterThan(0);
+  const addedOperation = addedPayload.data.operations.find((item) => item.id === addedPayload.result.id);
+  const updatedFutureResult = currentMonthResult + addedOperation.rubAmount;
+  await expect.poll(async () => numericValue(await income.textContent())).toBe(updatedFutureResult);
+  expect(ensureCalls).toBe(1);
+
+  await month.fill(currentMonth);
+  const updatedCurrentIncome = actualIncome + addedOperation.rubAmount;
+  await expect.poll(async () => numericValue(await income.textContent())).toBe(openingValue + updatedCurrentIncome);
+  await expect.poll(async () => numericValue(await page.locator('[data-overview-metric="result"] .metric-value').textContent())).toBe(updatedFutureResult);
   const balanceBeforeToggle = await page.locator('[data-overview-metric="balance"] .metric-value').textContent();
   await page.locator('#overview-opening-toggle').uncheck();
-  await expect.poll(async () => numericValue(await income.textContent())).toBe(0);
+  await expect.poll(async () => numericValue(await income.textContent())).toBe(updatedCurrentIncome);
   await expect(page.locator('[data-overview-metric="balance"] .metric-value')).toHaveText(balanceBeforeToggle);
-  const after = await (await request.get('/api/data')).json();
-  expect(after.operations).toHaveLength(operationsCount);
-  expect(after.accounts.map(({ id, calculatedBalance }) => [id, calculatedBalance])).toEqual(balances);
+  const final = await (await request.get('/api/data')).json();
+  expect(final.operations).toHaveLength(operationsCount + 1);
+  expect(final.accounts.find((item) => item.id === account.id).calculatedBalance).toBe(calculatedBalance + addedOperation.amount);
 });
-
 scenario('экраны баланса и накоплений показывают дату резервного курса и считают RUB/USD итог', async ({ page, request }) => {
   await request.post('/api/savings/accounts', { data: { name: 'Fallback USD savings', type: 'Вклад', currency: 'USD', initialCapital: 25 } });
   const actual = await (await request.get('/api/data')).json();

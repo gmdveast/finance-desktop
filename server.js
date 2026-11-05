@@ -64,6 +64,9 @@ class PrepareRate extends Error {
 class PrepareReferenceRate extends Error {
   constructor(currency, date) { super('Prepare optional reference rate outside workbook lock'); this.currency = currency; this.date = date; }
 }
+class PrepareSnapshotRates extends Error {
+  constructor(rates) { super('Prepare monthly snapshot rates outside workbook lock'); this.rates = rates; }
+}
 let inboxScanPromise = null;
 let syncQueue = Promise.resolve();
 const syncRuns = new Map();
@@ -695,8 +698,10 @@ function readAccounts(workbook, operations = readOperations(workbook)) {
       id: row,
       name,
       currency,
-      stored: Array.from({ length: 12 }, (_value, index) => clean(sheet.getCell(row, index + 1).value)).some(Boolean),
+      stored: Array.from({ length: 16 }, (_value, index) => clean(sheet.getCell(row, index + 1).value)).some(Boolean),
       active: Boolean(name && currency),
+      createdAt: dateToIso(sheet.getCell(row, 15).value) || null,
+      deletedAt: dateToIso(sheet.getCell(row, 16).value) || null,
       calculatedBalance,
       openingBalance,
       order: asNumber(sheet.getCell(row, 13).value) || row,
@@ -725,6 +730,272 @@ function readOpeningBalances(workbook) {
     balances.push({ id: row, accountId, amount: asNumber(sheet.getCell(row, 2).value), date: dateToIso(sheet.getCell(row, 3).value), rate: rate > 0 ? rate : null });
   }
   return balances;
+}
+
+const MONTHLY_SNAPSHOT_SHEET = '_FinanceMonthlyBalances';
+const MONTHLY_SNAPSHOT_SCHEMA = 'finance-monthly-balances-v1';
+
+function monthKey(date) { return String(date || '').slice(0, 7); }
+function validMonth(value) { return /^\d{4}-(0[1-9]|1[0-2])$/.test(value) && calendarDate(`${value}-01`); }
+function addMonth(month, count = 1) {
+  const [year, monthNumber] = month.split('-').map(Number);
+  const value = new Date(Date.UTC(year, monthNumber - 1 + count, 1));
+  return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+function hideWorksheet(workbook, name) {
+  for (const node of Array.from(workbook.workbookDoc.getElementsByTagNameNS(SHEET_NS, 'sheet'))) {
+    if (node.getAttribute('name') === name) node.setAttribute('state', 'veryHidden');
+  }
+}
+
+function monthlySnapshotLedger(workbook, create = false) {
+  let sheet = workbook.getWorksheet(MONTHLY_SNAPSHOT_SHEET);
+  if (!sheet && !create) return { sheet: null, startMonth: null, resetFloor: null, rows: new Map(), snapshots: new Map() };
+  if (!sheet) sheet = workbook.addWorksheet(MONTHLY_SNAPSHOT_SHEET);
+  const marker = clean(sheet.getCell(1, 1).value);
+  if (marker && marker !== MONTHLY_SNAPSHOT_SCHEMA) throw Object.assign(new Error('Monthly balance snapshot metadata is invalid.'), { status: 409 });
+  if (!marker) {
+    sheet.getCell(1, 1).value = MONTHLY_SNAPSHOT_SCHEMA;
+    sheet.getCell(2, 1).value = 'startMonth';
+    sheet.getCell(3, 1).value = 'month';
+    sheet.getCell(3, 2).value = 'snapshot';
+  }
+  hideWorksheet(workbook, MONTHLY_SNAPSHOT_SHEET);
+  const startMonth = clean(sheet.getCell(2, 2).value);
+  if (startMonth && !validMonth(startMonth)) throw Object.assign(new Error('Monthly balance snapshot start date is invalid.'), { status: 409 });
+  const resetFloor = clean(sheet.getCell(2, 3).value);
+  if (resetFloor && !validMonth(resetFloor)) throw Object.assign(new Error('Monthly balance snapshot reset date is invalid.'), { status: 409 });
+  const rows = new Map();
+  const snapshots = new Map();
+  for (let row = 4; row <= sheet.rowCount; row += 1) {
+    const month = clean(sheet.getCell(row, 1).value);
+    const raw = clean(sheet.getCell(row, 2).value);
+    if (!month && !raw) continue;
+    if (!validMonth(month) || !raw || rows.has(month)) throw Object.assign(new Error('Monthly balance snapshot row is invalid.'), { status: 409 });
+    let snapshot;
+    try { snapshot = JSON.parse(raw); } catch { throw Object.assign(new Error('Monthly balance snapshot JSON is invalid.'), { status: 409 }); }
+    if (snapshot?.schema !== 1 || snapshot.month !== month || snapshot.recordedOn !== `${month}-01` || !Array.isArray(snapshot.accounts)) throw Object.assign(new Error('Monthly balance snapshot structure is invalid.'), { status: 409 });
+    const accountIds = new Set();
+    for (const account of snapshot.accounts) {
+      if (!account || !Number.isInteger(account.accountId) || account.accountId < ACCOUNT_START_ROW || account.accountId > ACCOUNT_MAX_ROW
+        || accountIds.has(account.accountId) || typeof account.name !== 'string' || !account.name
+        || typeof account.currency !== 'string' || !/^[A-Z]{3}$/.test(account.currency)
+        || !Number.isFinite(account.amount) || !Number.isFinite(account.rate) || account.rate <= 0
+        || !calendarDate(account.rateEffectiveDate) || account.rateEffectiveDate > `${month}-01`
+        || typeof account.fallback !== 'boolean') throw Object.assign(new Error('Monthly balance snapshot account is invalid.'), { status: 409 });
+      accountIds.add(account.accountId);
+    }
+    rows.set(month, row);
+    snapshots.set(month, snapshot);
+  }
+  return { sheet, startMonth: startMonth || null, resetFloor: resetFloor || null, rows, snapshots };
+}
+
+function saveMonthlySnapshot(ledger, month, snapshot) {
+  let row = ledger.rows.get(month);
+  if (!row) row = Math.max(4, ledger.sheet.rowCount + 1);
+  ledger.sheet.getCell(row, 1).value = month;
+  ledger.sheet.getCell(row, 2).value = JSON.stringify(snapshot);
+  ledger.rows.set(month, row);
+  ledger.snapshots.set(month, snapshot);
+}
+
+function firstKnownAccountDates(accounts, operations, openingBalances) {
+  const accountIds = new Set(accounts.map((account) => account.id));
+  const firstDates = new Map();
+  const record = (accountId, date) => {
+    if (!accountIds.has(accountId) || !calendarDate(date)) return;
+    if (!firstDates.has(accountId) || date < firstDates.get(accountId)) firstDates.set(accountId, date);
+  };
+  for (const operation of operations) {
+    record(operation.accountId, operation.date);
+    record(operation.destinationAccountId, operation.date);
+  }
+  for (const opening of openingBalances) record(opening.accountId, opening.date);
+  return firstDates;
+}
+
+function ensureAccountLifecycleDates(
+  workbook,
+  activeAccounts = readAccounts(workbook).filter((account) => account.active),
+  operations = readOperations(workbook),
+  openingBalances = readOpeningBalances(workbook),
+) {
+  const balance = workbook.getWorksheet('Баланс');
+  const firstDates = firstKnownAccountDates(activeAccounts, operations, openingBalances);
+  const today = localIsoDate();
+  let changed = false;
+  for (const account of activeAccounts) {
+    if (account.createdAt) continue;
+    const createdAt = firstDates.get(account.id) || today;
+    balance.getCell(account.id, 15).value = excelDate(createdAt);
+    account.createdAt = createdAt;
+    changed = true;
+  }
+  balance.hideColumn(15);
+  balance.hideColumn(16);
+  return changed;
+}
+
+function accountExistsInSnapshotMonth(account, month) {
+  const monthEnd = `${addMonth(month)}-01`;
+  const firstDay = `${month}-01`;
+  return Boolean(account.createdAt && account.createdAt < monthEnd && (!account.deletedAt || account.deletedAt >= firstDay));
+}
+
+function monthlySnapshotRateNeeds(startMonth, endMonth, accounts, snapshots) {
+  const needs = new Map();
+  for (let month = startMonth; month <= endMonth; month = addMonth(month)) {
+    const date = `${month}-01`;
+    const frozenById = new Map((snapshots.get(month)?.accounts || []).map((item) => [item.accountId, item]));
+    for (const account of accounts) {
+      if (account.currency === 'RUB' || !accountExistsInSnapshotMonth(account, month)) continue;
+      const frozen = frozenById.get(account.id);
+      if (frozen?.currency === account.currency && Number.isFinite(frozen.rate) && frozen.rate > 0
+        && calendarDate(frozen.rateEffectiveDate) && frozen.rateEffectiveDate <= date) continue;
+      const key = `${account.currency}:${date}`;
+      const cached = cbrRateCache.get(key);
+      if (cached && Number.isFinite(cached.rate) && cached.rate > 0 && calendarDate(cached.effectiveDate) && cached.effectiveDate <= date) continue;
+      needs.set(key, { currency: account.currency, date });
+    }
+  }
+  return [...needs.values()];
+}
+
+function monthlyAccountMovements(operations) {
+  const byMonth = new Map();
+  const add = (month, accountId, amount) => {
+    if (!accountId || !Number.isFinite(amount) || amount === 0) return;
+    if (!byMonth.has(month)) byMonth.set(month, new Map());
+    const movements = byMonth.get(month);
+    movements.set(accountId, (movements.get(accountId) || 0) + amount);
+  };
+  for (const operation of operations) {
+    const month = monthKey(operation.date);
+    if (operation.type === 'Доход') add(month, operation.accountId, operation.amount);
+    if (operation.type === 'Расход' || operation.type === 'Инвестиция') add(month, operation.accountId, -operation.amount);
+    if (operation.type === 'Перевод') {
+      if (operation.savingsTransfer === 'from-savings') add(month, operation.destinationAccountId, operation.destinationAmount);
+      else if (operation.savingsTransfer === 'to-savings') add(month, operation.accountId, -operation.amount);
+      else if (!operation.savingsTransfer) {
+        add(month, operation.accountId, -operation.amount);
+        add(month, operation.destinationAccountId, operation.destinationAmount || operation.amount);
+      }
+    }
+  }
+  return byMonth;
+}
+
+function snapshotRate(currency, date) {
+  if (currency === 'RUB') return { rate: 1, effectiveDate: date, fallback: false };
+  const cached = cbrRateCache.get(`${currency}:${date}`);
+  if (!cached || !calendarDate(cached.effectiveDate) || cached.effectiveDate > date) throw new PrepareSnapshotRates([{ currency, date }]);
+  return { rate: cached.rate, effectiveDate: cached.effectiveDate, fallback: cached.effectiveDate !== date };
+}
+
+function buildMonthlySnapshot(workbook, month, previous, movementsByMonth, activeAccounts, openingBalances, frozenSnapshot = null) {
+  const movements = movementsByMonth.get(previous?.month) || new Map();
+  const openingById = new Map(openingBalances.map((item) => [item.accountId, item]));
+  const previousById = new Map((previous?.accounts || []).map((item) => [item.accountId, item]));
+  const frozenById = new Map((frozenSnapshot?.accounts || []).map((item) => [item.accountId, item]));
+  const accounts = [];
+  for (const account of activeAccounts) {
+    if (!accountExistsInSnapshotMonth(account, month)) continue;
+    const prior = previousById.get(account.id);
+    const newThisMonth = !prior;
+    const amount = newThisMonth
+      ? (openingById.get(account.id)?.amount || 0)
+      : prior.amount + (movements.get(account.id) || 0);
+    const currency = account.currency;
+    const frozen = frozenById.get(account.id);
+    const lockedRate = frozen && frozen.currency === currency && frozen.rate > 0
+      ? { rate: frozen.rate, effectiveDate: frozen.rateEffectiveDate, fallback: frozen.fallback }
+      : snapshotRate(currency, `${month}-01`);
+    accounts.push({
+      accountId: account.id,
+      name: account.name,
+      currency,
+      amount,
+      rate: lockedRate.rate,
+      rateEffectiveDate: lockedRate.effectiveDate,
+      fallback: Boolean(lockedRate.fallback),
+    });
+  }
+  return { schema: 1, month, recordedOn: `${month}-01`, accounts };
+}
+
+function applyMonthlySnapshotChanges(workbook, change) {
+  const ledger = monthlySnapshotLedger(workbook, false);
+  if (!ledger.sheet || !ledger.snapshots.size || !change?.fromMonth) return false;
+  const currentMonth = localIsoDate().slice(0, 7);
+  const startMonth = change.includeMonth ? change.fromMonth : addMonth(change.fromMonth);
+  if (startMonth > currentMonth) return false;
+  const activeAccounts = readAccounts(workbook).filter((account) => account.active);
+  const operations = readOperations(workbook);
+  const movementsByMonth = monthlyAccountMovements(operations);
+  const openingBalances = readOpeningBalances(workbook);
+  const rateNeeds = monthlySnapshotRateNeeds(startMonth, currentMonth, activeAccounts, ledger.snapshots);
+  if (rateNeeds.length) throw new PrepareSnapshotRates(rateNeeds);
+  let previous = ledger.snapshots.get(addMonth(startMonth, -1)) || null;
+  let changed = false;
+  for (let month = startMonth; month <= currentMonth; month = addMonth(month)) {
+    const snapshot = buildMonthlySnapshot(workbook, month, previous, movementsByMonth, activeAccounts, openingBalances, ledger.snapshots.get(month));
+    saveMonthlySnapshot(ledger, month, snapshot);
+    previous = snapshot;
+    changed = true;
+  }
+  return changed;
+}
+
+function markMonthlySnapshotsDirty(fromMonth, { includeMonth = false } = {}) {
+  const context = mutationContext.getStore();
+  if (!context || !validMonth(fromMonth)) return;
+  const current = context.monthlySnapshotRecalc;
+  if (!current || !current.fromMonth || fromMonth < current.fromMonth) context.monthlySnapshotRecalc = { fromMonth, includeMonth };
+  else if (fromMonth === current.fromMonth) current.includeMonth ||= includeMonth;
+}
+
+function clearMonthlySnapshots(workbook, startMonth = localIsoDate().slice(0, 7)) {
+  const ledger = monthlySnapshotLedger(workbook, true);
+  ledger.sheet.getCell(2, 2).value = startMonth;
+  ledger.sheet.getCell(2, 3).value = startMonth;
+  for (let row = 4; row <= ledger.sheet.rowCount; row += 1) {
+    ledger.sheet.getCell(row, 1).value = null;
+    ledger.sheet.getCell(row, 2).value = null;
+  }
+}
+
+function ensureMonthlySnapshots(workbook, selectedMonth) {
+  const hadSheet = Boolean(workbook.getWorksheet(MONTHLY_SNAPSHOT_SHEET));
+  const activeAccounts = readAccounts(workbook).filter((account) => account.active);
+  const operations = readOperations(workbook);
+  const openingBalances = readOpeningBalances(workbook);
+  const lifecycleChanged = ensureAccountLifecycleDates(workbook, activeAccounts, operations, openingBalances);
+  const ledger = monthlySnapshotLedger(workbook, true);
+  const currentMonth = localIsoDate().slice(0, 7);
+  const chartEnd = selectedMonth > currentMonth ? currentMonth : selectedMonth;
+  const chartStart = addMonth(chartEnd, -5);
+  const createdMonths = activeAccounts.map((account) => monthKey(account.createdAt)).filter(validMonth);
+  const dataStart = createdMonths.length ? createdMonths.sort()[0] : currentMonth;
+  const adjustedDataStart = ledger.resetFloor && dataStart < ledger.resetFloor ? ledger.resetFloor : dataStart;
+  const startMonth = ledger.startMonth && ledger.startMonth < adjustedDataStart ? ledger.startMonth : adjustedDataStart;
+  const adjustedChartStart = ledger.resetFloor && chartStart < ledger.resetFloor ? ledger.resetFloor : chartStart;
+  const effectiveStart = adjustedChartStart < startMonth ? adjustedChartStart : startMonth;
+  let changed = lifecycleChanged || !hadSheet || !ledger.startMonth || effectiveStart !== ledger.startMonth;
+  ledger.sheet.getCell(2, 2).value = effectiveStart;
+  const movementsByMonth = monthlyAccountMovements(operations);
+  const rateNeeds = monthlySnapshotRateNeeds(effectiveStart, currentMonth, activeAccounts, ledger.snapshots);
+  if (rateNeeds.length) throw new PrepareSnapshotRates(rateNeeds);
+  let previous = ledger.snapshots.get(addMonth(effectiveStart, -1)) || null;
+  for (let month = effectiveStart; month <= currentMonth; month = addMonth(month)) {
+    const existing = ledger.snapshots.get(month);
+    if (existing) { previous = existing; continue; }
+    const snapshot = buildMonthlySnapshot(workbook, month, previous, movementsByMonth, activeAccounts, openingBalances);
+    saveMonthlySnapshot(ledger, month, snapshot);
+    previous = snapshot;
+    changed = true;
+  }
+  return { changed, snapshots: [...ledger.snapshots.values()].sort((a, b) => a.month.localeCompare(b.month)) };
 }
 
 function recalculateAccountCells(workbook) {
@@ -823,6 +1094,7 @@ function serialize(workbook, currentRateErrors = {}) {
     return [currency, cached?.rate || null];
   }));
   const currentRateDates = Object.fromEntries([...currencies].map((currency) => [currency, getCachedCbrRate(currency, currentDate)?.effectiveDate || null]));
+  const monthlyLedger = monthlySnapshotLedger(workbook, false);
   const accounts = accountRows.map((account) => {
     const rate = currentRates[account.currency];
     return { ...account, rate, rateEffectiveDate: currentRateDates[account.currency], rubAmount: rate > 0 ? account.calculatedBalance * rate : null };
@@ -842,9 +1114,21 @@ function serialize(workbook, currentRateErrors = {}) {
     currentRateDates,
     currentRateErrors,
     openingBalances: readOpeningBalances(workbook),
+    monthlySnapshots: Object.fromEntries([...monthlyLedger.snapshots].sort(([a], [b]) => a.localeCompare(b))),
+    monthlySnapshotStartMonth: monthlyLedger.startMonth,
     syncBlocked: readIdentity(workbook).blocked,
     accountCapacity: { used: accounts.length, issued: identityState(workbook).accounts.size, total: ACCOUNT_MAX_ROW - ACCOUNT_START_ROW + 1 },
     lists: { ...readLists(workbook, false), investmentCategories: SYSTEM_INVESTMENT_CATEGORIES.map((item) => item.name) },
+  };
+}
+
+function serializeMonthlySnapshotData(workbook) {
+  const ledger = monthlySnapshotLedger(workbook, false);
+  return {
+    revision: workbook.revision,
+    asOfDate: localIsoDate(),
+    monthlySnapshots: Object.fromEntries([...ledger.snapshots].sort(([a], [b]) => a.localeCompare(b))),
+    monthlySnapshotStartMonth: ledger.startMonth,
   };
 }
 
@@ -911,25 +1195,45 @@ function identityState(workbook) {
 
 async function mutateWorkbook(mutator, { publish = true, includeData = true } = {}) {
   await loadCbrRateCache();
+  const mutationData = (workbook) => !includeData
+    ? undefined
+    : typeof includeData === 'function' ? includeData(workbook) : serialize(workbook);
   let payload;
   const prepared = new Set();
+  const preparedSnapshotRates = new Set();
   const unavailableOptionalRates = new Set();
   for (;;) {
-    const task = writeQueue.then(() => workbookStore.exclusive(() => mutationContext.run({ unavailableOptionalRates }, async () => {
+    const task = writeQueue.then(() => workbookStore.exclusive(() => mutationContext.run({ unavailableOptionalRates, monthlySnapshotRecalc: null }, async () => {
       const workbook = await validateWorkbookFile(WORKBOOK_PATH);
       const identity = identityState(workbook);
       const mutation = await mutator(workbook);
-      if (mutation?.skipSave) return { result: mutation.result, backup: null, data: includeData ? serialize(workbook) : undefined };
+      if (mutation?.skipSave) return { result: mutation.result, backup: null, data: mutationData(workbook) };
+      applyMonthlySnapshotChanges(workbook, mutationContext.getStore().monthlySnapshotRecalc);
       saveIdentity(workbook, mergeIdentity(identity, identityState(workbook)));
       recalculateAccountCells(workbook);
       const result = mutation;
       const saved = await saveWorkbook(workbook);
       workbook.revision = digest(await readFile(WORKBOOK_PATH));
-      return { result, backup: saved.backup, warnings: saved.warnings.map(() => 'Запись сохранена; обслуживание хранилища не завершено. Проверьте резервные копии.'), data: includeData ? serialize(workbook) : undefined };
+      return { result, backup: saved.backup, warnings: saved.warnings.map(() => 'Запись сохранена; обслуживание хранилища не завершено. Проверьте резервные копии.'), data: mutationData(workbook) };
     })));
     writeQueue = task.catch(() => {});
     try { payload = await task; break; }
     catch (error) {
+      if (error instanceof PrepareSnapshotRates) {
+        const missing = error.rates.filter(({ currency, date }) => !preparedSnapshotRates.has(`${currency}:${date}`));
+        if (!missing.length) throw new InputError('Monthly snapshot rates could not be prepared.');
+        for (const item of missing) preparedSnapshotRates.add(`${item.currency}:${item.date}`);
+        for (let index = 0; index < missing.length; index += 6) {
+          const results = await Promise.allSettled(missing.slice(index, index + 6).map(async ({ currency, date }) => {
+            const rate = await fetchCbrRateWithFallback(currency, date);
+            cbrRateCache.set(`${currency}:${date}`, { ...rate, requestedDate: date });
+          }));
+          await persistCbrRateCache();
+          const failure = results.find((result) => result.status === 'rejected');
+          if (failure) throw failure.reason;
+        }
+        continue;
+      }
       if (error instanceof PrepareReferenceRate) {
         const key = `${error.currency}:${error.date}`;
         try { await fetchCbrRate(error.currency, error.date); }
@@ -1309,6 +1613,7 @@ async function createOperation(body, options = {}) {
       targetRow = sheet.rowCount - 99;
     }
     writeOperation(sheet, targetRow, operation);
+    markMonthlySnapshotsDirty(monthKey(operation.date));
     if (operation.type === 'Инвестиция') {
       const { movements } = savingsSheets(workbook);
       const movementRow = Math.max(2, movements.rowCount + 1);
@@ -1823,6 +2128,7 @@ app.post('/api/settings/clear-data', async (req, res, next) => {
         const opening = openingBalanceSheet(workbook);
         clearSheetRows(opening, 2, 4);
       }
+      clearMonthlySnapshots(workbook);
       balance.getCell(1, 14).value = JSON.stringify({ ...reset, ids: [] });
       const state = identityState(workbook);
       for (const id of reset.ids) { state.events.add(id); state.discarded.add(id); }
@@ -1929,6 +2235,19 @@ app.get('/api/data', async (_req, res, next) => {
   } catch (error) { next(error); }
 });
 
+app.post('/api/monthly-snapshots/ensure', async (req, res, next) => {
+  try {
+    const month = clean(req.body?.month) || localIsoDate().slice(0, 7);
+    if (!validMonth(month)) throw new InputError('Choose a valid calendar month.');
+    const compact = req.body?.compact === true;
+    const payload = await mutateWorkbook((workbook) => {
+      const result = ensureMonthlySnapshots(workbook, month);
+      return result.changed ? { createdThrough: localIsoDate().slice(0, 7), months: result.snapshots.length } : { skipSave: true, result: { createdThrough: localIsoDate().slice(0, 7), months: result.snapshots.length } };
+    }, { publish: false, includeData: compact ? serializeMonthlySnapshotData : true });
+    res.json(payload);
+  } catch (error) { next(error); }
+});
+
 app.get('/api/snapshot', async (_req, res, next) => {
   try { res.json({ revision: digest(await readFile(WORKBOOK_PATH)), asOfDate: localIsoDate() }); } catch (error) { next(error); }
 });
@@ -1994,6 +2313,7 @@ app.put('/api/operations/opening-balance', async (req, res, next) => {
     if (!calendarDate(date) || !Number.isFinite(Date.parse(`${date}T00:00:00Z`))) throw new InputError('Укажите корректную дату начального баланса.');
     if (!Number.isInteger(accountId) || !Number.isFinite(amount) || amount < 0) throw new InputError('Выберите счёт и укажите неотрицательную сумму.');
     const payload = await mutateWorkbook(async (workbook) => {
+      ensureAccountLifecycleDates(workbook);
       const account = readAccounts(workbook).find((item) => item.id === accountId && item.active);
       if (!account) throw new InputError('Начальный баланс можно задать только для активного обычного счёта.');
       const { rate } = await fetchCbrRate(account.currency, date);
@@ -2009,6 +2329,7 @@ app.put('/api/operations/opening-balance', async (req, res, next) => {
       sheet.getCell(row, 2).value = amount;
       sheet.getCell(row, 3).value = excelDate(date);
       sheet.getCell(row, 4).value = rate;
+      markMonthlySnapshotsDirty(monthKey(account.createdAt || date), { includeMonth: true });
       return { accountId, amount, date, rate, replaced: hadExisting };
     });
     res.json(payload);
@@ -2146,6 +2467,7 @@ app.put('/api/operations/:id', async (req, res, next) => {
           ? previous.rate : (await fetchCbrRate(operation.currency, operation.date)).rate;
         if (savings.currency !== main.currency) await Promise.all([savings.currency, main.currency].map((currency) => prepareReferenceRate(currency, date)));
         if (operation.amount * operation.rate > 1e12) throw new InputError('Рублёвый эквивалент превышает 1e12.');
+        markMonthlySnapshotsDirty(monthKey(previous.date < date ? previous.date : date));
         writeOperation(sheet, row, operation);
         const movements = workbook.getWorksheet('Движение накоплений');
         [savingId, excelDate(date), -savingAmount, 'Перевод', row].forEach((value, index) => { movements.getCell(linked.movementRow, index + 1).value = value; });
@@ -2164,6 +2486,7 @@ app.put('/api/operations/:id', async (req, res, next) => {
       if (operation.amount * operation.rate > 1e12) throw new InputError('Рублёвый эквивалент превышает 1e12.');
       operation.sourceId ||= clean(sheet.getCell(row, 12).value);
       operation.recordedAt = previous.recordedAt;
+      markMonthlySnapshotsDirty(monthKey(previous.date < operation.date ? previous.date : operation.date));
       writeOperation(sheet, row, operation);
       if (linkedKind === 'investment') {
         const movements = workbook.getWorksheet('Движение накоплений');
@@ -2211,6 +2534,7 @@ app.delete('/api/operations/:id', async (req, res, next) => {
         }
         for (let column = 1; column <= 6; column += 1) movements.getCell(movementRow, column).value = null;
       }
+      markMonthlySnapshotsDirty(monthKey(dateToIso(sheet.getCell(row, 1).value)));
       for (const column of [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]) sheet.getCell(row, column).value = null;
       sheet.getCell(row, 8).value = { formula: `IF(OR(E${row}="",F${row}=""),"",IF(F${row}="RUB",E${row},IF(G${row}="", "",E${row}*G${row})))`, result: '' };
       return { id: row };
@@ -2338,6 +2662,12 @@ app.put('/api/accounts', async (req, res, next) => {
         if (isNew) {
           sheet.getCell(row, 13).value = Math.max(0, ...[...currentAccounts.values()].filter((item) => item.active).map((item) => item.order)) + created.length;
           sheet.hideColumn(13);
+          sheet.getCell(row, 15).value = excelDate(createdAt);
+          sheet.hideColumn(15);
+          sheet.hideColumn(16);
+          markMonthlySnapshotsDirty(monthKey(createdAt), { includeMonth: true });
+        } else if (current?.currency && current.currency !== currency) {
+          markMonthlySnapshotsDirty(localIsoDate().slice(0, 7), { includeMonth: true });
         }
         sheet.getCell(row, 4).value = currency === 'RUB' ? null : rate;
         if (isNew) {
@@ -2374,6 +2704,10 @@ app.delete('/api/accounts/:id', async (req, res, next) => {
       if (linked) throw new InputError(`Счёт «${account.name}» используется операциями и не может быть удалён.`);
       const sheet = workbook.getWorksheet('Баланс');
       for (let column = 1; column <= 13; column += 1) sheet.getCell(row, column).value = null;
+      sheet.getCell(row, 16).value = excelDate(localIsoDate());
+      sheet.hideColumn(15);
+      sheet.hideColumn(16);
+      markMonthlySnapshotsDirty(localIsoDate().slice(0, 7), { includeMonth: true });
       const openingSheet = workbook.getWorksheet(OPENING_BALANCE_SHEET);
       if (openingSheet) {
         for (let index = 2; index <= openingSheet.rowCount; index += 1) {

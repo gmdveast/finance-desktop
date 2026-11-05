@@ -47,13 +47,26 @@ async function setup(t, legacy = false, historyRows = 0) {
   await mkdir(backups);
 
   const cbrPort = await freePort();
-  const rates = { comparison: false, firstDayUnavailable: false, missingCurrentGel: false, gelMissingAll: false, repeatMissingBulletin: false };
+  const rates = { comparison: false, firstDayUnavailable: false, missingCurrentGel: false, gelMissingAll: false, repeatMissingBulletin: false, monthlySnapshotRates: false, monthlySnapshotFirstDayUnavailable: false };
   const requestedDates = [];
   const cbrServer = createServer(async (_req, res) => {
     const requestedDate = new URL(_req.url, 'http://localhost').searchParams.get('date_req');
     requestedDates.push(requestedDate);
     if (rates.gate && requestedDate === '15/03/2019') { rates.started(); await rates.gate; }
     if (rates.unavailable) { res.writeHead(503); res.end('PRIVATE_UPSTREAM'); return; }
+    if (rates.monthlySnapshotRates) {
+      const [day, month, year] = requestedDate.split('/');
+      if (rates.monthlySnapshotFirstDayUnavailable && requestedDate === '01/11/2026') {
+        res.writeHead(200, { 'Content-Type': 'application/xml; charset=windows-1251' });
+        res.end('<ValCurs Date="01.11.2026"><Valute><CharCode>USD</CharCode><Nominal>1</Nominal><Value>90,0000</Value></Valute></ValCurs>');
+        return;
+      }
+      const effectiveDate = `${day}.${month}.${year}`;
+      const gel = month === '11' ? '11,0000' : '10,0000';
+      res.writeHead(200, { 'Content-Type': 'application/xml; charset=windows-1251' });
+      res.end(`<ValCurs Date="${effectiveDate}"><Valute><CharCode>USD</CharCode><Nominal>1</Nominal><Value>90,0000</Value></Valute><Valute><CharCode>GEL</CharCode><Nominal>1</Nominal><Value>${gel}</Value></Valute><Valute><CharCode>JPY</CharCode><Nominal>100</Nominal><Value>54,0000</Value></Valute></ValCurs>`);
+      return;
+    }
     if (rates.missingCurrentGel && (rates.gelMissingAll || requestedDate === '16/10/2026')) {
       const [requestedDay, requestedMonth, requestedYear] = requestedDate.split('/');
       const effectiveDate = rates.gelMissingAll
@@ -119,11 +132,11 @@ async function setup(t, legacy = false, historyRows = 0) {
     await rm(sandbox, { recursive: true, force: true });
   });
 
-  return { ...api, sandbox, workbook, backups, cbrCache, baseUrl, requestedDates, rates };
+  return { ...api, sandbox, workbook, backups, cbrCache, baseUrl, requestedDates, rates, setDate: restoreClock.setDate };
 }
 
 function defineScenarios(context, scenario) {
-  const { ensureOperationCapacity, exportMobileBalancesOnce, exportMobileListsOnce, importInboxOnce, synchronizeMobile, startInboxImporter, loadWorkbook, migrateCategoryEmojis, repairTransferRatesOnce, sandbox, workbook, backups, cbrCache, baseUrl, requestedDates, rates } = context;
+  const { ensureOperationCapacity, exportMobileBalancesOnce, exportMobileListsOnce, importInboxOnce, synchronizeMobile, startInboxImporter, loadWorkbook, migrateCategoryEmojis, repairTransferRatesOnce, sandbox, workbook, backups, cbrCache, baseUrl, requestedDates, rates, setDate } = context;
   const send = (route, body, method = 'POST') => jsonRequest(baseUrl, route, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   scenario('отдаёт интерфейс и структуру всех листов', async () => {
     const page = await fetch(baseUrl);
@@ -1684,6 +1697,102 @@ function defineScenarios(context, scenario) {
       assert.equal(busy.response.status, 503);
       assert.equal(busy.payload.retryable, true);
     } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  });
+
+  scenario('monthly opening snapshots carry prior month balances, freeze rates, and recalculate only the later suffix', async () => {
+    rates.monthlySnapshotRates = true;
+    const rubOpening = await send('/api/operations/opening-balance', { accountId: 5, amount: 100000, date: '2026-10-01' }, 'PUT');
+    const gelOpening = await send('/api/operations/opening-balance', { accountId: 6, amount: 500, date: '2026-10-01' }, 'PUT');
+    assert.equal(rubOpening.response.status, 200);
+    assert.equal(gelOpening.response.status, 200);
+    const expense = await send('/api/operations', {
+      date: '2026-10-10', type: 'Расход', category: 'Продукты', amount: 90000,
+      currency: 'RUB', rate: 1, necessity: 'Обязательная', accountId: 5,
+    });
+    assert.equal(expense.response.status, 201);
+    const priorExpense = expense.payload.data.operations.find((item) => item.id === expense.payload.result.id);
+    const gelExpense = await send('/api/operations', {
+      date: '2026-10-12', type: priorExpense.type, category: priorExpense.category, amount: 100,
+      currency: 'GEL', rate: 6, necessity: priorExpense.necessity, accountId: 6,
+    });
+    assert.equal(gelExpense.response.status, 201);
+    setDate('2026-11-05T09:00:00.000Z');
+
+    const first = await send('/api/monthly-snapshots/ensure', { month: '2026-11' });
+    assert.equal(first.response.status, 200);
+    const october = first.payload.data.monthlySnapshots['2026-10'];
+    const november = first.payload.data.monthlySnapshots['2026-11'];
+    assert.equal(october.accounts.find((item) => item.accountId === 5).amount, 100000);
+    assert.equal(october.accounts.find((item) => item.accountId === 6).amount, 500);
+    assert.equal(october.accounts.find((item) => item.accountId === 6).rate, 10);
+    assert.equal(november.accounts.find((item) => item.accountId === 5).amount, 10000);
+    assert.equal(november.accounts.find((item) => item.accountId === 6).amount, 400);
+    assert.equal(november.accounts.find((item) => item.accountId === 6).rate, 11, JSON.stringify({ account: november.accounts.find((item) => item.accountId === 6), requestedDates }));
+    assert.equal(november.accounts.find((item) => item.accountId === 6).rateEffectiveDate, '2026-11-01');
+    assert.equal(first.payload.data.accounts.find((item) => item.id === 5).calculatedBalance, 10000);
+    assert.equal(first.payload.data.operations.length, 2);
+    assert.equal(first.payload.data.operations.find((item) => item.id === gelExpense.payload.result.id).rubAmount, 600);
+
+    const loadedWorkbook = await loadWorkbook();
+    const hiddenSheet = Array.from(loadedWorkbook.workbookDoc.getElementsByTagNameNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'sheet'))
+      .find((item) => item.getAttribute('name') === '_FinanceMonthlyBalances');
+    assert.equal(hiddenSheet?.getAttribute('state'), 'veryHidden');
+    const compact = await send('/api/monthly-snapshots/ensure', { month: '2026-11', compact: true });
+    assert.equal(compact.response.status, 200);
+    assert.ok(compact.payload.data.monthlySnapshots['2026-11']);
+    assert.equal(compact.payload.data.operations, undefined);
+    assert.equal(compact.payload.data.accounts, undefined);
+    const firstHash = await sha256(workbook);
+    const repeated = await send('/api/monthly-snapshots/ensure', { month: '2026-11' });
+    assert.equal(repeated.payload.backup, null);
+    assert.equal(await sha256(workbook), firstHash);
+
+    const savedExpense = first.payload.data.operations.find((item) => item.id === expense.payload.result.id);
+    const edited = await send(`/api/operations/${savedExpense.id}`, {
+      date: savedExpense.date, type: savedExpense.type, category: savedExpense.category, amount: 80000,
+      currency: savedExpense.currency, rate: savedExpense.rate, necessity: savedExpense.necessity,
+      accountId: savedExpense.accountId, destinationAmount: 0, notes: savedExpense.notes,
+    }, 'PUT');
+    assert.equal(edited.response.status, 200);
+    assert.equal(edited.payload.data.monthlySnapshots['2026-10'].accounts.find((item) => item.accountId === 5).amount, 100000);
+    assert.equal(edited.payload.data.monthlySnapshots['2026-11'].accounts.find((item) => item.accountId === 5).amount, 20000);
+    assert.equal(edited.payload.data.monthlySnapshots['2026-11'].accounts.find((item) => item.accountId === 6).rate, 11);
+
+    const createdAccount = await send('/api/accounts', { accounts: [{ name: 'Новый счёт ноября', currency: 'USD', rate: 90 }] }, 'PUT');
+    assert.equal(createdAccount.response.status, 200);
+    const newAccountId = createdAccount.payload.result.created[0];
+    const newOpening = await send('/api/operations/opening-balance', { accountId: newAccountId, amount: 1000, date: '2026-11-05' }, 'PUT');
+    assert.equal(newOpening.response.status, 200);
+    const withNewAccount = newOpening.payload.data.monthlySnapshots;
+    assert.equal(withNewAccount['2026-10'].accounts.some((item) => item.accountId === newAccountId), false);
+    assert.equal(withNewAccount['2026-11'].accounts.find((item) => item.accountId === newAccountId).amount, 1000);
+
+    const future = await send('/api/operations', {
+      date: '2027-02-10', type: 'Расход', category: 'Продукты', amount: 1000,
+      currency: 'RUB', rate: 1, necessity: 'Обязательная', accountId: 5,
+    });
+    assert.equal(future.response.status, 201);
+    const futureView = await send('/api/monthly-snapshots/ensure', { month: '2027-02' });
+    assert.equal(futureView.payload.data.monthlySnapshots['2027-02'], undefined);
+    assert.equal(futureView.payload.data.monthlySnapshots['2026-11'].accounts.find((item) => item.accountId === 5).amount, 20000);
+    assert.equal(futureView.payload.data.accounts.find((item) => item.id === 5).calculatedBalance, 20000);
+  });
+
+  scenario('monthly opening snapshots use and expose the nearest earlier CBR bulletin when needed', async () => {
+    rates.monthlySnapshotRates = true;
+    rates.monthlySnapshotFirstDayUnavailable = true;
+    const opening = await send('/api/operations/opening-balance', { accountId: 6, amount: 500, date: '2026-10-01' }, 'PUT');
+    assert.equal(opening.response.status, 200);
+    setDate('2026-11-05T09:00:00.000Z');
+
+    const result = await send('/api/monthly-snapshots/ensure', { month: '2026-11' });
+    assert.equal(result.response.status, 200);
+    const snapshot = result.payload.data.monthlySnapshots['2026-11'].accounts.find((item) => item.accountId === 6);
+    assert.equal(snapshot.rate, 10);
+    assert.equal(snapshot.rateEffectiveDate, '2026-10-31');
+    assert.equal(snapshot.fallback, true);
+    assert.ok(requestedDates.includes('01/11/2026'));
+    assert.ok(requestedDates.includes('31/10/2026'));
   });
 
   scenario('CBR current-rate fallback uses the nearest earlier bulletin for both ledgers and persists misses', async () => {

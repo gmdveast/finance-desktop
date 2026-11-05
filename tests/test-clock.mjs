@@ -6,7 +6,7 @@ export const TEST_INSTANT = process.env.FINANCE_TEST_INSTANT || '2026-10-16T09:0
 export function installTestClock() {
   process.env.TZ = 'Europe/Moscow';
   const NativeDate = globalThis.Date;
-  const offset = NativeDate.parse(TEST_INSTANT) - NativeDate.now();
+  let offset = NativeDate.parse(TEST_INSTANT) - NativeDate.now();
   const nativeStat = fs.stat;
   // File ages must use the same time domain as Date.now() (receipt retention).
   fs.stat = async (...args) => {
@@ -20,5 +20,7 @@ export function installTestClock() {
     constructor(...args) { super(...(args.length ? args : [NativeDate.now() + offset])); }
     static now() { return NativeDate.now() + offset; }
   };
-  return () => { globalThis.Date = NativeDate; fs.stat = nativeStat; syncBuiltinESMExports(); };
+  const restore = () => { globalThis.Date = NativeDate; fs.stat = nativeStat; syncBuiltinESMExports(); };
+  restore.setDate = (instant) => { offset = NativeDate.parse(instant) - NativeDate.now(); };
+  return restore;
 }

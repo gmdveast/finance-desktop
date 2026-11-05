@@ -18,6 +18,7 @@ const restoreDialog = document.querySelector('#restore-dialog');
 const restoreForm = document.querySelector('#restore-form');
 const VIEWS = ['overview', 'operations', 'balance', 'savings', 'lists', 'phone', 'settings'];
 const PHONE_CHECKS_KEY = 'finance-phone-setup-checks';
+const overviewOperationIndexCache = new WeakMap();
 
 const amountSelector = '#operation-form [name="amount"], #operation-form [name="destinationAmount"], #savings-transfer-form [name="savingAmount"], #savings-transfer-form [name="mainAmount"], #opening-balance-form [name="amount"], #savings-create-form [name="initialCapital"], .savings-increase-form [name="amount"]';
 const signedAmountSelector = '.savings-increase-form [name="amount"]';
@@ -98,6 +99,7 @@ const state = {
   month: '',
   monthFollowsCurrent: true,
   includeOpeningBalances: false,
+  monthlySnapshotsLoading: false,
   overviewDirection: 'expense',
   operationMonth: '',
   operationType: 'Все',
@@ -349,8 +351,79 @@ function refreshIfStale() {
   return freshnessCheck;
 }
 
-function monthOperations(month = state.month) {
+function monthOperations(month = state.month, grouped = null) {
+  if (grouped) return grouped.get(month) || [];
   return state.data.operations.filter((operation) => operation.date.startsWith(month));
+}
+
+function snapshotMonthForMonth(month) {
+  const currentMonth = String(state.data.asOfDate || localIsoDate()).slice(0, 7);
+  return month > currentMonth ? currentMonth : month;
+}
+
+function hasMonthlySnapshotForMonth(month) {
+  return Boolean(state.data?.monthlySnapshots?.[snapshotMonthForMonth(month)]);
+}
+
+function monthlySnapshotForMonth(month) {
+  const snapshots = state.data.monthlySnapshots || {};
+  return snapshots[snapshotMonthForMonth(month)] || null;
+}
+
+function overviewOperationIndex() {
+  if (state.data && overviewOperationIndexCache.has(state.data)) return overviewOperationIndexCache.get(state.data);
+  const operationsByMonth = new Map();
+  const totalsByMonth = new Map();
+  for (const operation of state.data.operations || []) {
+    const month = operation.date?.slice(0, 7);
+    if (!month) continue;
+    if (!operationsByMonth.has(month)) {
+      operationsByMonth.set(month, []);
+      totalsByMonth.set(month, { income: 0, expense: 0, investment: 0, required: 0, flexible: 0, incomeCount: 0, expenseCount: 0 });
+    }
+    operationsByMonth.get(month).push(operation);
+    const sum = totalsByMonth.get(month);
+    const amount = Number.isFinite(operation.rubAmount) ? operation.rubAmount : 0;
+    if (operation.type === 'Доход') { sum.income += amount; sum.incomeCount += 1; }
+    if (operation.type === 'Расход' || operation.type === 'Инвестиция') { sum.expense += amount; sum.expenseCount += 1; }
+    if (operation.type === 'Инвестиция') sum.investment += amount;
+    if (operation.type === 'Расход' && operation.necessity === 'Обязательная') sum.required += amount;
+    if (operation.type === 'Расход' && operation.necessity === 'Гибкая') sum.flexible += amount;
+  }
+  const index = { operationsByMonth, totalsByMonth };
+  if (state.data) overviewOperationIndexCache.set(state.data, index);
+  return index;
+}
+
+function overviewMonthTotals(month, index = null) {
+  const snapshot = state.includeOpeningBalances ? monthlySnapshotForMonth(month) : null;
+  const currentMonth = String(state.data.asOfDate || localIsoDate()).slice(0, 7);
+  const snapshotRub = snapshot ? snapshot.accounts.reduce((sum, account) => sum + account.amount * account.rate, 0) : 0;
+  const sum = index?.totalsByMonth.get(month) || totals(monthOperations(month, index?.operationsByMonth));
+  const currentSum = month > currentMonth
+    ? index?.totalsByMonth.get(currentMonth) || totals(monthOperations(currentMonth, index?.operationsByMonth))
+    : null;
+  const openingRub = month > currentMonth && snapshot
+    ? snapshotRub + currentSum.income - currentSum.expense
+    : snapshotRub;
+  return { ...sum, openingRub, incomeDisplay: sum.income + openingRub, result: sum.income + openingRub - sum.expense, snapshot, usesCurrentMonthResult: month > currentMonth };
+}
+
+async function ensureMonthlySnapshotsForOverview(month = state.month) {
+  if (hasMonthlySnapshotForMonth(month)) return state.data;
+  const revisionAtRequest = state.data?.revision;
+  const result = await request('/api/monthly-snapshots/ensure', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ month, compact: true }),
+  });
+  const current = state.data || {};
+  state.data = {
+    ...current,
+    ...result.data,
+    revision: current.revision === revisionAtRequest ? result.data.revision : current.revision,
+  };
+  return result.data;
 }
 
 function accounts() {
@@ -405,22 +478,30 @@ function pageHeader(title, subtitle, withMonth = false) {
 }
 
 function renderOverview() {
-  const openingOperations = state.includeOpeningBalances ? (state.data.openingBalances || []).flatMap((item) => {
-    const account = accountById(item.accountId);
-    const rate = account?.currency === 'RUB' ? 1 : item.rate;
-    return rate > 0 ? [{ ...item, type: 'Доход', category: 'Начальный баланс', rubAmount: item.amount * rate, opening: true }] : [];
-  }) : [];
-  const operations = [...monthOperations(), ...openingOperations.filter((item) => item.date.startsWith(state.month))];
-  const sum = totals(operations);
+  const overviewIndex = overviewOperationIndex();
+  const monthTotals = overviewMonthTotals(state.month, overviewIndex);
+  const snapshot = monthTotals.snapshot;
+  const openingRub = monthTotals.openingRub;
+  const operations = monthOperations(state.month, overviewIndex.operationsByMonth);
+  const sum = monthTotals;
   const currentBalanceRub = cachedRubTotal(accounts());
-  const net = sum.income - sum.expense;
-  const resultNote = sum.income ? `${Math.round((net / sum.income) * 100)}% от доходов` : sum.expense ? 'Нет доходов за период' : 'Нет операций за период';
+  const net = sum.result;
+  const incomeDisplay = sum.incomeDisplay;
+  const incomeType = translate('Доход');
+  const expenseType = translate('Расход');
+  const investmentType = translate('Инвестиция');
+  const actualIncomeCount = sum.incomeCount || 0;
+  const resultNote = incomeDisplay ? translate('{percent}% от доходов и остатка', { percent: Math.round((net / incomeDisplay) * 100) }) : sum.expense ? translate('Нет доходов за период') : translate('Нет операций за период');
   const categories = new Map();
   const isIncome = state.overviewDirection === 'income';
-  const categoryTotal = isIncome ? sum.income : sum.expense;
-  operations.filter((item) => isIncome ? item.type === 'Доход' : item.type === 'Расход' || item.type === 'Инвестиция').forEach((item) => categories.set(item.category || 'Без категории', (categories.get(item.category || 'Без категории') || 0) + item.rubAmount));
+  const categoryTotal = isIncome ? incomeDisplay : sum.expense;
+  operations.filter((item) => isIncome ? typeLabel(item.type) === incomeType : typeLabel(item.type) === expenseType || typeLabel(item.type) === investmentType)
+    .forEach((item) => categories.set(item.category || 'Без категории', (categories.get(item.category || 'Без категории') || 0) + item.rubAmount));
+  if (isIncome && state.includeOpeningBalances && openingRub > 0) {
+    const openingLabel = translate('Начальный остаток');
+    categories.set(openingLabel, (categories.get(openingLabel) || 0) + openingRub);
+  }
   const sortedCategories = [...categories.entries()].sort((a, b) => b[1] - a[1]);
-  const topCategories = sortedCategories;
   const unclassified = Math.max(0, sum.expense - sum.required - sum.flexible - sum.investment);
   const months = [];
   const anchor = new Date(`${state.month}-01T12:00:00`);
@@ -428,55 +509,61 @@ function renderOverview() {
     const date = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1);
     const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
     const shortMonth = new Intl.DateTimeFormat(localeCode(), { month: 'short' }).format(date).replace('.', '');
-    months.push({ key, label: `${shortMonth} ${String(date.getFullYear()).slice(-2)}`, fullLabel: monthLabel(key), ...totals([...monthOperations(key), ...openingOperations.filter((item) => item.date.startsWith(key))]) });
+    const values = overviewMonthTotals(key, overviewIndex);
+    months.push({ key, label: `${shortMonth} ${String(date.getFullYear()).slice(-2)}`, fullLabel: monthLabel(key), ...values, income: values.incomeDisplay });
   }
   const chartMax = Math.max(...months.flatMap((item) => [item.income, item.expense]), 1);
   const recent = monthOperations().slice(0, 5);
-  const categoryRows = topCategories.map(([name, value]) => {
+  const categoryRows = sortedCategories.map(([name, value]) => {
     const share = categoryTotal ? Math.round(value / categoryTotal * 100) : 0;
-    return `<div class="category-row"><span class="category-name">${esc(name === 'Остальные' ? `📊 ${name}` : categoryLabel(name))} <small>${share}%</small></span><strong>${money(value)}</strong><div class="track"><i style="width:${share}%"></i></div></div>`;
+    return `<div class="category-row"><span class="category-name">${esc(categoryLabel(name))} <small>${share}%</small></span><strong>${money(value)}</strong><div class="track"><i style="width:${share}%"></i></div></div>`;
   }).join('');
   const necessityRows = [
-    ['Обязательные', sum.required, 'required'],
-    ['Гибкие', sum.flexible, 'flexible'],
-    ['Инвестиции', sum.investment, 'investment'],
-    ['Не указано', unclassified, 'unclassified'],
+    [translate('Обязательные'), sum.required, 'required'],
+    [translate('Гибкие'), sum.flexible, 'flexible'],
+    [translate('Инвестиции'), sum.investment, 'investment'],
+    [translate('Не указано'), unclassified, 'unclassified'],
   ].filter(([, value]) => value > 0);
+  const snapshotRates = snapshot ? [...new Map(snapshot.accounts.map((item) => [item.currency, { currency: item.currency, date: item.rateEffectiveDate, fallback: item.fallback }])).values()] : [];
+  const snapshotRateSummary = snapshotRates.map((item) => `${item.currency} — ${item.date}${item.fallback ? ` (${translate('Ближайший предыдущий бюллетень')})` : ''}`).join('; ') || translate('Счетов нет');
+  const snapshotStatus = state.includeOpeningBalances
+    ? state.monthlySnapshotsLoading
+      ? `<p class="snapshot-status" role="status">${esc(translate('Подготавливаем снимок начального остатка…'))}</p>`
+      : snapshot
+        ? `<p class="snapshot-status" role="status">${esc(translate(monthTotals.usesCurrentMonthResult
+          ? 'Для будущего месяца начальный остаток равен результату {month} и обновляется при изменении его операций. Оценка по курсам ЦБ: {rates}.'
+          : 'Остаток на начало {month} оценён по курсам ЦБ: {rates}.', { month: monthLabel(snapshot.month), rates: snapshotRateSummary }))}</p>`
+        : `<p class="snapshot-status" role="status">${esc(translate('Снимок начального остатка для выбранного месяца пока недоступен.'))}</p>`
+    : '';
 
-  content.innerHTML = `${pageHeader(`Обзор за ${monthLabel(state.month)}`, 'Сводка по книге', true)}
-    <label class="overview-opening-toggle"><input id="overview-opening-toggle" type="checkbox" ${state.includeOpeningBalances ? 'checked' : ''}> Учитывать начальные балансы как доход</label>
+  content.innerHTML = `${pageHeader(translate('Обзор за {month}', { month: monthLabel(state.month) }), translate('Сводка по книге'), true)}
+    <label class="overview-opening-toggle"><input id="overview-opening-toggle" type="checkbox" ${state.includeOpeningBalances ? 'checked' : ''} ${state.monthlySnapshotsLoading ? 'disabled' : ''}> ${translate('Учитывать остаток на начало месяца')}</label>
     ${currentRateStatusMarkup(accounts())}
-    ${state.includeOpeningBalances && (state.data.openingBalances || []).some((item) => accountById(item.accountId)?.currency !== 'RUB' && !(item.rate > 0)) ? '<p role="status">Начальные балансы без исторического курса не включены в доходы.</p>' : ''}
+    ${snapshotStatus}
     <div class="dashboard-grid">
       <section class="overview-main">
-    <div class="metrics">
-      <article class="metric" data-overview-metric="income"><span class="metric-label">Доходы</span><strong class="metric-value">${money(sum.income)}</strong><span class="metric-note">${operationCountLabel(operations.filter((x) => x.type === 'Доход').length)}</span></article>
-      <article class="metric" data-overview-metric="expense"><span class="metric-label">Расходы</span><strong class="metric-value">${money(sum.expense)}</strong><span class="metric-note">${operationCountLabel(operations.filter((x) => x.type === 'Расход' || x.type === 'Инвестиция').length)}</span></article>
-      <article class="metric accent ${net < 0 ? 'negative' : ''}" data-overview-metric="result"><span class="metric-label">Результат месяца</span><strong class="metric-value">${money(net)}</strong><span class="metric-note">${resultNote}</span></article>
-      <article class="metric" data-overview-metric="balance"><span class="metric-label">Текущий остаток</span><strong class="metric-value">${currentBalanceRub === null ? '—' : money(currentBalanceRub)}</strong><span class="metric-note">Расчётно по всем активным счетам</span></article>
-    </div>
-      <article class="card overview-chart-card"><div class="card-head"><h2>Динамика за 6 месяцев</h2><div class="legend"><span><i class="income"></i>Доход</span><span><i class="expense"></i>Расход</span><span><i class="investment"></i>Инвестиции в расходах</span></div></div>
-        <div class="chart">${months.map((item) => {
-          const investmentShare = item.expense ? item.investment / item.expense : 0;
-          const split = `${Math.max(0, 100 - investmentShare * 100)}%`;
-          const expenseStyle = item.investment > 0 ? `background:linear-gradient(to top,var(--expense-series) ${split},var(--investment-series) ${split})` : '';
-          const accessibleLabel = translate('{month}: доход {income}, расход {expense}, включая инвестиции {investment}', {
-            month: item.fullLabel,
-            income: money(item.income),
-            expense: money(item.expense),
-            investment: money(item.investment),
-          });
-          return `<div class="chart-group" tabindex="0" aria-label="${esc(accessibleLabel)}" title="${esc(accessibleLabel)}"><i class="bar" style="height:${item.income ? Math.max(2, item.income / chartMax * 175) : 0}px"></i><i class="bar expense" style="height:${item.expense ? Math.max(2, item.expense / chartMax * 175) : 0}px;${expenseStyle}"></i><span class="chart-label">${esc(item.label)}</span></div>`;
-        }).join('')}</div>
-      </article>
+        <div class="metrics">
+          <article class="metric" data-overview-metric="income"><span class="metric-label">${translate('Доходы')}</span><strong class="metric-value">${money(incomeDisplay)}</strong><span class="metric-note">${state.includeOpeningBalances ? translate('Фактический доход {income} · Остаток на начало {opening} · {count}', { income: money(sum.income), opening: money(openingRub), count: operationCountLabel(actualIncomeCount) }) : operationCountLabel(actualIncomeCount)}</span></article>
+          <article class="metric" data-overview-metric="expense"><span class="metric-label">${translate('Расходы')}</span><strong class="metric-value">${money(sum.expense)}</strong><span class="metric-note">${operationCountLabel(sum.expenseCount || 0)}</span></article>
+          <article class="metric accent ${net < 0 ? 'negative' : ''}" data-overview-metric="result"><span class="metric-label">${translate('Результат месяца')}</span><strong class="metric-value">${money(net)}</strong><span class="metric-note">${resultNote}</span></article>
+          <article class="metric" data-overview-metric="balance"><span class="metric-label">${translate('Текущий остаток')}</span><strong class="metric-value">${currentBalanceRub === null ? '—' : money(currentBalanceRub)}</strong><span class="metric-note">${translate('Расчётно по всем активным счетам')}</span></article>
+        </div>
+        <article class="card overview-chart-card"><div class="card-head"><h2>${translate('Динамика за 6 месяцев')}</h2><div class="legend"><span><i class="income"></i>${translate('Доход')}</span><span><i class="expense"></i>${translate('Расход')}</span><span><i class="investment"></i>${translate('Инвестиции в расходах')}</span></div></div>
+          <div class="chart">${months.map((item) => {
+            const investmentShare = item.expense ? item.investment / item.expense : 0;
+            const split = `${Math.max(0, 100 - investmentShare * 100)}%`;
+            const expenseStyle = item.investment > 0 ? `background:linear-gradient(to top,var(--expense-series) ${split},var(--investment-series) ${split})` : '';
+            const accessibleLabel = translate('{month}: доход {income}, расход {expense}, включая инвестиции {investment}', { month: item.fullLabel, income: money(item.income), expense: money(item.expense), investment: money(item.investment) });
+            return `<div class="chart-group" tabindex="0" aria-label="${esc(accessibleLabel)}" title="${esc(accessibleLabel)}"><i class="bar" style="height:${item.income ? Math.max(2, item.income / chartMax * 175) : 0}px"></i><i class="bar expense" style="height:${item.expense ? Math.max(2, item.expense / chartMax * 175) : 0}px;${expenseStyle}"></i><span class="chart-label">${esc(item.label)}</span></div>`;
+          }).join('')}</div>
+        </article>
       </section>
-      <article class="card spending-card"><div class="card-head"><h2>${isIncome ? 'Структура доходов' : 'Структура расходов'}</h2><span>${money(categoryTotal)}</span></div><label><span>${translate('Показывать')}</span><select id="overview-direction"><option value="expense" ${!isIncome ? 'selected' : ''}>${translate('Расходы')}</option><option value="income" ${isIncome ? 'selected' : ''}>${translate('Доходы')}</option></select></label>
-        ${!isIncome && sum.expense ? `<section class="necessity-summary" aria-label="Расходы по необходимости"><h3>По необходимости</h3><div class="necessity-track">${necessityRows.map(([label, value, className]) => `<i class="${className}" style="width:${value / sum.expense * 100}%" title="${esc(`${label}: ${money(value)}`)}"></i>`).join('')}</div><div class="necessity-legend">${necessityRows.map(([label, value, className]) => `<div><i class="${className}"></i><span>${esc(label)}<small>${money(value)} · ${Math.round(value / sum.expense * 100)}%</small></span></div>`).join('')}</div></section>` : ''}<div class="section-title"><h3>По категориям</h3></div><div class="category-list" role="region" tabindex="0" aria-label="Список категорий">${categoryRows || '<div class="empty-state">В этом месяце операций пока нет</div>'}</div>
+      <article class="card spending-card"><div class="card-head"><h2>${translate(isIncome ? 'Структура доходов' : 'Структура расходов')}</h2><span>${money(categoryTotal)}</span></div><label><span>${translate('Показывать')}</span><select id="overview-direction"><option value="expense" ${!isIncome ? 'selected' : ''}>${translate('Расходы')}</option><option value="income" ${isIncome ? 'selected' : ''}>${translate('Доходы')}</option></select></label>
+        ${!isIncome && sum.expense ? `<section class="necessity-summary" aria-label="${translate('Расходы по необходимости')}"><h3>${translate('По необходимости')}</h3><div class="necessity-track">${necessityRows.map(([label, value, className]) => `<i class="${className}" style="width:${value / sum.expense * 100}%" title="${esc(`${label}: ${money(value)}`)}"></i>`).join('')}</div><div class="necessity-legend">${necessityRows.map(([label, value, className]) => `<div><i class="${className}"></i><span>${esc(label)}<small>${money(value)} · ${Math.round(value / sum.expense * 100)}%</small></span></div>`).join('')}</div></section>` : ''}<div class="section-title"><h3>${translate('По категориям')}</h3></div><div class="category-list" role="region" tabindex="0" aria-label="${translate('Список категорий')}">${categoryRows || `<div class="empty-state">${translate('В этом месяце операций пока нет')}</div>`}</div>
       </article>
-      <article class="card recent-card"><div class="card-head"><h2>Последние операции за месяц</h2><button class="row-action" data-view="operations">Все операции →</button></div>${operationTable(recent, false)}</article>
+      <article class="card recent-card"><div class="card-head"><h2>${translate('Последние операции за месяц')}</h2><button class="row-action" data-view="operations">${translate('Все операции →')}</button></div>${operationTable(recent, false)}</article>
     </div>`;
 }
-
 function operationSupplement(item) {
   const exchange = item.exchange;
   const hasTransferRoute = item.type === 'Перевод' && (!item.savingsTransfer || item.savingsTransfer === 'from-savings');
@@ -1601,7 +1688,21 @@ document.addEventListener('change', (event) => {
 document.querySelector('#mobile-menu').addEventListener('click', () => document.querySelector('.sidebar').classList.toggle('open'));
 
 content.addEventListener('change', async (event) => {
-  if (event.target.id === 'overview-opening-toggle') { state.includeOpeningBalances = event.target.checked; renderOverview(); return; }
+  if (event.target.id === 'overview-opening-toggle') {
+    state.includeOpeningBalances = event.target.checked;
+    if (!state.includeOpeningBalances) {
+      state.monthlySnapshotsLoading = false;
+      renderOverview();
+      return;
+    }
+    state.monthlySnapshotsLoading = !hasMonthlySnapshotForMonth(state.month);
+    renderOverview();
+    if (!state.monthlySnapshotsLoading) return;
+    try { await ensureMonthlySnapshotsForOverview(); }
+    catch (error) { state.includeOpeningBalances = false; notify(error.message, 'error'); }
+    finally { state.monthlySnapshotsLoading = false; renderOverview(); }
+    return;
+  }
   if (event.target.id === 'overview-direction') { state.overviewDirection = event.target.value; renderOverview(); return; }
   const accountRow = event.target.closest?.('[data-account-row]');
   if (accountRow && event.target.matches('[name="currency"]')) await updateAccountRate(accountRow);
@@ -1625,6 +1726,13 @@ content.addEventListener('change', async (event) => {
     const currentMonth = localIsoDate().slice(0, 7);
     state.month = event.target.value || currentMonth;
     state.monthFollowsCurrent = state.month === currentMonth;
+    if (state.includeOpeningBalances && !hasMonthlySnapshotForMonth(state.month)) {
+      state.monthlySnapshotsLoading = true;
+      renderOverview();
+      try { await ensureMonthlySnapshotsForOverview(); }
+      catch (error) { notify(error.message, 'error'); }
+      finally { state.monthlySnapshotsLoading = false; }
+    }
     render();
   }
   if (event.target.id === 'operation-month') { state.operationMonth = event.target.value; state.dateFrom = ''; state.dateTo = ''; renderOperations(); }
