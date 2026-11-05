@@ -624,6 +624,35 @@ scenario('оба баланса сразу показывают USD и не ме
   expect(comparisons).toBe(2);
 });
 
+scenario('сравнение показывает разницу курсов ЦБ и даты бюллетеней в обоих учётах', async ({ page, request }) => {
+  await request.put('/api/operations/opening-balance', { data: { accountId: 5, amount: 100, date: '2026-10-14' } });
+  await request.post('/api/savings/accounts', { data: { name: 'USD reserve', type: 'Вклад', currency: 'USD', initialCapital: 50 } });
+  await page.goto('/#balance');
+
+  const values = async (selector) => {
+    const row = page.locator(`${selector} tbody tr`).filter({ hasText: 'USD' });
+    await expect(row).toHaveCount(1);
+    const numbers = await row.locator('td').evaluateAll((cells) => cells.slice(1).map((cell) => {
+      const directText = [...cell.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent).join(' ').trim();
+      const normalized = directText.replace(/[\s\u00a0\u202f]/gu, '').replace(',', '.').replace(/[^\d.+-]/gu, '');
+      return Number(normalized);
+    }));
+    return { row, numbers };
+  };
+  const expectedDate = (date) => page.evaluate((iso) => new Intl.DateTimeFormat(document.documentElement.lang === 'en' ? 'en-GB' : 'ru-RU', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(`${iso}T12:00:00`)), date);
+
+  const main = await values('.currency-comparison');
+  expect(main.numbers).toEqual([100, 90, 91.25, 9000, 9125, 125]);
+  await expect(main.row.locator('.rate-effective-date').nth(0)).toHaveText(await expectedDate('2026-10-01'));
+  await expect(main.row.locator('.rate-effective-date').nth(1)).toHaveText(await expectedDate('2026-10-16'));
+
+  await page.locator('[data-view="savings"]').click();
+  const savings = await values('.savings-comparison');
+  expect(savings.numbers).toEqual([50, 90, 91.25, 4500, 4562.5, 62.5]);
+  await expect(savings.row.locator('.rate-effective-date').nth(0)).toHaveText(await expectedDate('2026-10-01'));
+  await expect(savings.row.locator('.rate-effective-date').nth(1)).toHaveText(await expectedDate('2026-10-16'));
+});
+
 scenario('мобильное поле даты не пересекается с отдельной кнопкой календаря', async ({ page }) => {
   const styles = await readFile(new URL('../obsidian-plugin/finance-capture/styles.css', import.meta.url), 'utf8');
   for (const width of [320, 390, 768]) {
@@ -1695,6 +1724,98 @@ scenario('обзор включает начальный баланс тольк
   await page.locator('#overview-opening-toggle').uncheck();
   await expect(income).toHaveText(before);
   await expect(page.locator('.category-list')).not.toContainText('Начальный баланс');
+});
+
+scenario('ноябрьский начальный баланс входит в выбранный месяц и график только по переключателю', async ({ page, request }) => {
+  const before = await (await request.get('/api/data')).json();
+  const usd = before.accounts.find((account) => account.currency === 'USD');
+  await request.put('/api/operations/opening-balance', { data: { accountId: usd.id, amount: 1234, date: '2026-11-05' } });
+  const saved = await (await request.get('/api/data')).json();
+  const expectedIncome = 1234 * saved.openingBalances.find((item) => item.accountId === usd.id).rate;
+  const operationsCount = saved.operations.length;
+  const balances = saved.accounts.map(({ id, calculatedBalance }) => [id, calculatedBalance]);
+  const numericValue = (text) => {
+    const raw = text.replace(/[^\d,.-]/gu, '');
+    return Number(raw.includes('.') ? raw.replaceAll(',', '') : raw.replace(',', '.'));
+  };
+
+  await page.goto('/#overview');
+  const month = page.locator('#month-picker');
+  await month.fill('2026-11');
+  await expect(month).toHaveValue('2026-11');
+  await page.locator('#overview-direction').selectOption('income');
+  const income = page.locator('[data-overview-metric="income"] .metric-value');
+  await expect.poll(async () => numericValue(await income.textContent())).toBe(0);
+  await page.locator('#overview-opening-toggle').check();
+  expect(numericValue(await income.textContent())).toBeCloseTo(expectedIncome, 2);
+  expect(numericValue(await page.locator('[data-overview-metric="result"] .metric-value').textContent())).toBeCloseTo(expectedIncome, 2);
+  await expect(page.locator('.category-list')).toContainText('Начальный баланс');
+  const novemberBar = page.locator('.chart-group').last();
+  expect(await novemberBar.locator('.bar').first().evaluate((bar) => Number.parseFloat(bar.style.height))).toBeGreaterThan(0);
+
+  await month.fill('2026-12');
+  await expect.poll(async () => numericValue(await income.textContent())).toBe(0);
+  await month.fill('2026-10');
+  await expect.poll(async () => numericValue(await income.textContent())).toBe(0);
+  await month.fill('2026-11');
+  const balanceBeforeToggle = await page.locator('[data-overview-metric="balance"] .metric-value').textContent();
+  await page.locator('#overview-opening-toggle').uncheck();
+  await expect.poll(async () => numericValue(await income.textContent())).toBe(0);
+  await expect(page.locator('[data-overview-metric="balance"] .metric-value')).toHaveText(balanceBeforeToggle);
+  const after = await (await request.get('/api/data')).json();
+  expect(after.operations).toHaveLength(operationsCount);
+  expect(after.accounts.map(({ id, calculatedBalance }) => [id, calculatedBalance])).toEqual(balances);
+});
+
+scenario('экраны баланса и накоплений показывают дату резервного курса и считают RUB/USD итог', async ({ page, request }) => {
+  await request.post('/api/savings/accounts', { data: { name: 'Fallback USD savings', type: 'Вклад', currency: 'USD', initialCapital: 25 } });
+  const actual = await (await request.get('/api/data')).json();
+  const fallback = {
+    ...actual,
+    currentRates: { ...actual.currentRates, USD: 90 },
+    currentRateDates: { ...actual.currentRateDates, USD: '2026-10-15' },
+    accounts: actual.accounts.map((account) => account.currency === 'USD'
+      ? { ...account, rate: 90, rateEffectiveDate: '2026-10-15', rubAmount: account.calculatedBalance * 90 }
+      : account),
+  };
+  const totalInRub = (accounts) => accounts.reduce((sum, account) => sum + account.calculatedBalance * (account.currency === 'RUB' ? 1 : fallback.currentRates[account.currency]), 0);
+  const numericValue = (text) => {
+    const raw = text.replace(/[^\d,.-]/gu, '');
+    return Number(raw.includes('.') ? raw.replaceAll(',', '') : raw.replace(',', '.'));
+  };
+  let displayedData = fallback;
+  await page.route('**/api/data', (route) => route.fulfill({ json: displayedData }));
+
+  await page.goto('/#balance');
+  const fallbackDateLabel = await page.evaluate(() => new Intl.DateTimeFormat(document.documentElement.lang === 'en' ? 'en-GB' : 'ru-RU', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date('2026-10-15T12:00:00')));
+  await expect(page.locator('.rate-status')).toContainText('USD');
+  await expect(page.locator('.rate-status')).toContainText(fallbackDateLabel);
+  const usdRow = page.locator('.accounts-table tbody tr').filter({ hasText: 'USD' });
+  await expect(usdRow.locator('.rate-effective-date')).toContainText(fallbackDateLabel);
+  expect(numericValue(await page.locator('.balance-hero [data-rub-total]').textContent())).toBeCloseTo(totalInRub(fallback.accounts), 2);
+  expect(numericValue(await page.locator('.balance-hero [data-total-currency-equivalents]').textContent())).toBeCloseTo(totalInRub(fallback.accounts) / 90, 2);
+
+  await page.locator('[data-view="savings"]').click();
+  await expect(page.locator('.rate-status')).toContainText(fallbackDateLabel);
+  const savingsRub = totalInRub(fallback.savingsAccounts);
+  expect(numericValue(await page.locator('.savings-hero [data-rub-total]').textContent())).toBeCloseTo(savingsRub, 2);
+  expect(numericValue(await page.locator('.savings-hero [data-total-currency-equivalents]').textContent())).toBeCloseTo(savingsRub / 90, 2);
+
+  displayedData = {
+    ...fallback,
+    currentRates: { ...fallback.currentRates, USD: null },
+    currentRateDates: { ...fallback.currentRateDates, USD: null },
+    currentRateErrors: { USD: 'CBR rate unavailable' },
+    accounts: fallback.accounts.map((account) => account.currency === 'USD' ? { ...account, rate: null, rateEffectiveDate: null, rubAmount: null } : account),
+  };
+  await page.reload();
+  await expect(page.locator('.rate-status')).toContainText('31');
+  await expect(page.locator('.balance-hero [data-rub-total]')).toHaveText('—');
+  await expect(page.locator('.balance-hero [data-total-currency-equivalents]')).toContainText('— USD');
+  await page.locator('[data-view="savings"]').click();
+  await expect(page.locator('.rate-status')).toContainText('31');
+  await expect(page.locator('.savings-hero [data-rub-total]')).toHaveText('—');
+  await expect(page.locator('.savings-hero [data-total-currency-equivalents]')).toContainText('— USD');
 });
 
 scenario('ошибка сохранения начального баланса показывается попапом', async ({ page }) => {

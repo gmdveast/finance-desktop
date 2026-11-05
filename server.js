@@ -76,7 +76,9 @@ const workbookStore = new WorkbookStore({ file: WORKBOOK_PATH, backupDirectory: 
 let runtimeControl = null;
 let shutdownPromise = null;
 const cbrRateCache = new Map();
+const cbrBulletinCache = new Map();
 const cbrRateRequests = new Map();
+const CBR_FALLBACK_WINDOW_DAYS = 31;
 const syncStatus = { enabled: false, directory: SYNC_DIR, lastScanAt: null, imported: 0, duplicates: 0, errors: 0, lastError: null };
 const CATEGORY_EMOJIS = new Map(Object.entries({
   'Жильё и аренда': '🏠', 'Коммунальные услуги': '💡', 'Продукты': '🛒', 'Кафе и доставка': '🍽️',
@@ -545,7 +547,7 @@ async function prepareBalanceRates() {
   const workbook = await loadWorkbook();
   const date = localIsoDate();
   const currencies = new Set(readAccounts(workbook).filter((a) => a.active).map((a) => a.currency));
-  await Promise.allSettled([...currencies].map((currency) => fetchCbrRate(currency, date)));
+  await Promise.allSettled([...currencies].map((currency) => fetchCbrRateWithFallback(currency, date)));
 }
 
 async function publishMobileBalances(rootDirectory, workbook) {
@@ -555,7 +557,7 @@ async function publishMobileBalances(rootDirectory, workbook) {
   const currencies = [...new Set(accountRows.map((account) => account.currency))];
   // Network preparation happens before the lock; publish balances from the latest workbook.
   const rates = Object.fromEntries(currencies.map((currency) => {
-    const result = currency === 'RUB' ? { rate: 1, effectiveDate: asOfDate } : cbrRateCache.get(`${currency}:${asOfDate}`);
+    const result = getCachedCbrRate(currency, asOfDate);
     return [currency, result ? { rate: result.rate, effectiveDate: result.effectiveDate } : null];
   }));
   const missingRates = currencies.filter((currency) => !rates[currency]);
@@ -803,7 +805,7 @@ function operationExchangeInfo(operation, accountsById, savingsById) {
   };
 }
 
-function serialize(workbook) {
+function serialize(workbook, currentRateErrors = {}) {
   const summaryMonth = dateToIso(workbook.getWorksheet('Сводка').getCell('B2').value).slice(0, 7);
   const storedOperations = readOperations(workbook);
   const currentDate = localIsoDate();
@@ -817,13 +819,13 @@ function serialize(workbook) {
   }));
   const currencies = new Set(['USD', ...[...accountRows, ...savingsAccounts].map((account) => account.currency)]);
   const currentRates = Object.fromEntries([...currencies].map((currency) => {
-    if (currency === 'RUB') return [currency, 1];
-    const cached = cbrRateCache.get(`${currency}:${currentDate}`);
+    const cached = getCachedCbrRate(currency, currentDate);
     return [currency, cached?.rate || null];
   }));
+  const currentRateDates = Object.fromEntries([...currencies].map((currency) => [currency, getCachedCbrRate(currency, currentDate)?.effectiveDate || null]));
   const accounts = accountRows.map((account) => {
     const rate = currentRates[account.currency];
-    return { ...account, rate, rubAmount: rate > 0 ? account.calculatedBalance * rate : null };
+    return { ...account, rate, rateEffectiveDate: currentRateDates[account.currency], rubAmount: rate > 0 ? account.calculatedBalance * rate : null };
   });
   return {
     workbook: path.basename(WORKBOOK_PATH),
@@ -837,6 +839,8 @@ function serialize(workbook) {
     balances: accounts,
     savingsAccounts,
     currentRates,
+    currentRateDates,
+    currentRateErrors,
     openingBalances: readOpeningBalances(workbook),
     syncBlocked: readIdentity(workbook).blocked,
     accountCapacity: { used: accounts.length, issued: identityState(workbook).accounts.size, total: ACCOUNT_MAX_ROW - ACCOUNT_START_ROW + 1 },
@@ -1323,24 +1327,43 @@ async function loadCbrRateCache() {
       for (const [key, value] of Object.entries(payload.rates)) {
         if (value && /^[A-Z]{3}:\d{4}-\d{2}-\d{2}$/.test(key) && Number.isFinite(value.rate) && value.rate > 0) cbrRateCache.set(key, value);
       }
+      if (payload.bulletins && typeof payload.bulletins === 'object') {
+        for (const [date, value] of Object.entries(payload.bulletins)) {
+          if (calendarDate(date) && calendarDate(value?.effectiveDate) && Array.isArray(value.currencies)
+            && value.currencies.every((currency) => typeof currency === 'string' && /^[A-Z]{3}$/.test(currency))) {
+            cbrBulletinCache.set(date, { effectiveDate: value.effectiveDate, currencies: [...new Set(value.currencies)] });
+          }
+        }
+      }
     }).catch(() => {});
   }
   await cbrCacheLoadPromise;
 }
 
 function persistCbrRateCache() {
-  const snapshot = { schema: 1, generatedAt: new Date().toISOString(), rates: Object.fromEntries(cbrRateCache) };
+  const snapshot = {
+    schema: 1,
+    generatedAt: new Date().toISOString(),
+    rates: Object.fromEntries(cbrRateCache),
+    bulletins: Object.fromEntries(cbrBulletinCache),
+  };
   cbrCacheWriteQueue = cbrCacheWriteQueue.catch(() => {}).then(() => writeJsonAtomic(CBR_CACHE_PATH, snapshot));
   return cbrCacheWriteQueue;
 }
 
-async function fetchCbrRate(currency, date, { refresh = false } = {}) {
+async function fetchCbrRateExact(currency, date, { refresh = false } = {}) {
   if (!calendarDate(date)) throw new InputError('Некорректная дата курса.');
   if (currency === 'RUB') return { currency, rate: 1, requestedDate: date, effectiveDate: date, source: 'RUB' };
   if (!/^[A-Z]{3}$/.test(currency)) throw new InputError(`Валюта «${currency}» отсутствует в справочнике ЦБ РФ.`);
   const cacheKey = `${currency}:${date}`;
   await loadCbrRateCache();
   if (!refresh && cbrRateCache.has(cacheKey)) return cbrRateCache.get(cacheKey);
+  const savedBulletin = !refresh && cbrBulletinCache.get(date);
+  if (savedBulletin && !savedBulletin.currencies.includes(currency)) {
+    const missing = new InputError(`Валюта «${currency}» отсутствует в справочнике ЦБ РФ.`, 400, 'CBR_CURRENCY_MISSING');
+    missing.effectiveDate = savedBulletin.effectiveDate;
+    throw missing;
+  }
   if (mutationContext.getStore()) throw new PrepareRate(currency, date);
   // XML_daily contains the entire daily bulletin: share it across currencies.
   if (!cbrRateRequests.has(date)) {
@@ -1378,6 +1401,8 @@ async function fetchCbrRate(currency, date, { refresh = false } = {}) {
 
       }
       if (!rates.size || !calendarDate(`${effectiveYear}-${effectiveMonth}-${effectiveDay}`)) throw Object.assign(new Error('Invalid CBR bulletin'), { status: 502 });
+      const effectiveDate = `${effectiveYear}-${effectiveMonth}-${effectiveDay}`;
+      cbrBulletinCache.set(date, { effectiveDate, currencies: [...rates.keys()] });
       for (const [code, result] of rates) cbrRateCache.set(`${code}:${date}`, result);
       await persistCbrRateCache();
       return rates;
@@ -1386,8 +1411,72 @@ async function fetchCbrRate(currency, date, { refresh = false } = {}) {
     request.finally(() => { if (cbrRateRequests.get(date) === request) cbrRateRequests.delete(date); }).catch(() => {});
   }
   const result = (await cbrRateRequests.get(date)).get(currency);
-  if (!result) throw new InputError(`Валюта «${currency}» отсутствует в справочнике ЦБ РФ.`);
+  if (!result) {
+    const bulletin = cbrBulletinCache.get(date);
+    const missing = new InputError(`Валюта «${currency}» отсутствует в справочнике ЦБ РФ.`, 400, 'CBR_CURRENCY_MISSING');
+    missing.effectiveDate = bulletin?.effectiveDate || date;
+    throw missing;
+  }
   return result;
+}
+
+function shiftIsoDate(date, days) {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function dayDistance(startDate, endDate) {
+  return Math.round((Date.parse(`${endDate}T00:00:00.000Z`) - Date.parse(`${startDate}T00:00:00.000Z`)) / 86400000);
+}
+
+function getCachedCbrRate(currency, date, maxDays = CBR_FALLBACK_WINDOW_DAYS) {
+  if (currency === 'RUB') return { currency: 'RUB', rate: 1, requestedDate: date, effectiveDate: date, source: 'RUB' };
+  let closest = null;
+  for (const [key, rate] of cbrRateCache) {
+    if (!key.startsWith(`${currency}:`) || !calendarDate(rate?.effectiveDate)) continue;
+    const age = dayDistance(rate.effectiveDate, date);
+    if (age < 0 || age > maxDays) continue;
+    if (!closest || rate.effectiveDate > closest.effectiveDate) closest = rate;
+  }
+  return closest;
+}
+
+async function fetchCbrRateWithFallback(currency, date, { refresh = false } = {}) {
+  try { return await fetchCbrRateExact(currency, date, { refresh }); }
+  catch (primaryError) {
+    if (currency === 'RUB' || primaryError instanceof PrepareRate) throw primaryError;
+    const cutoff = shiftIsoDate(date, -CBR_FALLBACK_WINDOW_DAYS);
+    let cursor = primaryError?.code === 'CBR_CURRENCY_MISSING' && calendarDate(primaryError.effectiveDate)
+      ? shiftIsoDate(primaryError.effectiveDate, -1)
+      : shiftIsoDate(date, -1);
+    while (cursor >= cutoff) {
+      try {
+        const rate = await fetchCbrRateExact(currency, cursor);
+        const age = dayDistance(rate.effectiveDate, date);
+        if (age >= 0 && age <= CBR_FALLBACK_WINDOW_DAYS) {
+          return { ...rate, requestedDate: date, fallback: rate.effectiveDate !== date };
+        }
+      } catch (error) {
+        if (error instanceof PrepareRate) throw error;
+        if (error?.code === 'CBR_CURRENCY_MISSING' && calendarDate(error.effectiveDate)) {
+          const previousEffectiveDate = shiftIsoDate(error.effectiveDate, -1);
+          cursor = previousEffectiveDate < cursor ? previousEffectiveDate : shiftIsoDate(cursor, -1);
+          continue;
+        }
+        break;
+      }
+      cursor = shiftIsoDate(cursor, -1);
+    }
+    const cached = getCachedCbrRate(currency, date);
+    if (cached) return { ...cached, requestedDate: date, fallback: cached.effectiveDate !== date };
+    throw primaryError;
+  }
+}
+
+async function fetchCbrRate(currency, date, options = {}) {
+  if (date === localIsoDate() && currency !== 'RUB') return fetchCbrRateWithFallback(currency, date, options);
+  return fetchCbrRateExact(currency, date, options);
 }
 
 async function prepareReferenceRate(currency, date) {
@@ -1784,13 +1873,18 @@ app.get('/api/balance/currency-comparison', async (_req, res, next) => {
       return lookups.get(key);
     };
     const currentRates = new Map();
+    const currentRateDates = new Map();
     const rateErrors = {};
     const requiredCurrencies = new Set([...totals.keys(), 'USD']);
     if (refreshRates) {
       for (const account of [...readAccounts(workbook).filter((item) => item.active), ...readSavings(workbook)]) requiredCurrencies.add(account.currency);
     }
     const currentLookups = Promise.all([...requiredCurrencies].map(async (currency) => {
-      try { currentRates.set(currency, (await getRate(currency, today)).rate); }
+      try {
+        const rate = await getRate(currency, today);
+        currentRates.set(currency, rate.rate);
+        currentRateDates.set(currency, rate.effectiveDate);
+      }
       catch (error) { rateErrors[currency] = publicError(error).error; }
     }));
     const historicalLookups = refreshRates ? Promise.allSettled([...requiredCurrencies].map((currency) => getRate(currency, firstDay))) : Promise.resolve();
@@ -1812,7 +1906,7 @@ app.get('/api/balance/currency-comparison', async (_req, res, next) => {
       ? [...totals].reduce((sum, [currency, amount]) => sum + amount * currentRates.get(currency), 0)
       : null;
     const usdTotal = currentRubTotal !== null && usdRate > 0 ? currentRubTotal / usdRate : null;
-    res.json({ today, firstDay, currencies, total, rateErrors, currentRates: Object.fromEntries(currentRates), currentRubTotal, usdRate: usdRate || null, usdTotal });
+    res.json({ today, firstDay, currencies, total, rateErrors, currentRates: Object.fromEntries(currentRates), currentRateDates: Object.fromEntries(currentRateDates), currentRubTotal, usdRate: usdRate || null, usdTotal });
   } catch (error) { next(error); }
 });
 
@@ -1820,12 +1914,16 @@ app.get('/api/data', async (_req, res, next) => {
   try {
     const workbook = await loadWorkbook();
     const currencies = new Set(['USD', ...readAccounts(workbook).filter((item) => item.active).map((item) => item.currency), ...readSavings(workbook).map((item) => item.currency)]);
-    await Promise.allSettled([...currencies].map((currency) => fetchCbrRate(currency, localIsoDate())));
+    const currentRateResults = await Promise.all([...currencies].map(async (currency) => {
+      try { await fetchCbrRate(currency, localIsoDate()); return [currency, null]; }
+      catch (error) { return [currency, publicError(error).error]; }
+    }));
+    const currentRateErrors = Object.fromEntries(currentRateResults.filter(([, error]) => error));
     const data = await withWorkbookQueue(async () => {
       const latest = await loadWorkbook();
       try { await publishMobileBalances(SYNC_DIR, latest); }
       catch (error) { if (process.env.NODE_ENV !== 'test') diagnose(error); }
-      return serialize(latest);
+      return serialize(latest, currentRateErrors);
     });
     res.json(data);
   } catch (error) { next(error); }
@@ -1945,8 +2043,10 @@ app.delete('/api/savings/accounts/:id', async (req, res, next) => {
     const payload = await mutateWorkbook((workbook) => {
       const { accounts } = savingsSheets(workbook);
       if (!Number.isInteger(id) || id < 2 || id > accounts.rowCount || !clean(accounts.getCell(id, 1).value)) throw new InputError('Накопительный счёт не найден.');
-      const linked = readSavings(workbook).some((account) => account.id === id && account.movements.length);
-      if (linked) throw new InputError('Нельзя удалить счёт с историей движения капитала.');
+      const savingsAccount = readSavings(workbook).find((account) => account.id === id);
+      if (savingsAccount.initialCapital !== 0 || savingsAccount.movements.length) {
+        throw new InputError('Нельзя удалить счёт с капиталом или историей движения капитала.');
+      }
       for (let column = 1; column <= 5; column += 1) accounts.getCell(id, column).value = null;
       return { deleted: true, id };
     });

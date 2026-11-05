@@ -335,6 +335,11 @@ tbody tr:hover { background: #fbfaf4; }
 .currency-comparison { margin-top: 24px; }
 .currency-comparison p, .reset-settings p { color: var(--muted); line-height: 1.6; }
 .currency-comparison tfoot { font-weight: 800; }
+.currency-comparison .rate-effective-date { display: block; margin-top: 2px; color: var(--muted); font-size: .75rem; font-weight: 400; white-space: nowrap; }
+.account-rate-cell .rate-effective-date { white-space: normal; }
+.rate-status { margin: 10px 0 16px; padding: 10px 14px; border-left: 3px solid var(--accent, #bd8b31); border-radius: 6px; background: var(--surface-raised, #f4f1e9); color: var(--muted); font-size: .9rem; line-height: 1.5; }
+.rate-status p { margin: 0; }
+.rate-status p + p { margin-top: 4px; }
 .rate-panel[hidden] { display: none; }
 input[name="destinationAmount"][readonly], #investment-category-label[readonly] { background: #e9eae7; color: #747b77; }
 .operation-note { min-width: 220px; max-width: 360px; }

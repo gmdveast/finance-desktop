@@ -10,8 +10,14 @@ if (!testRoot) throw new Error('Isolated FINANCE_E2E_ROOT is required');
 await createFixture(path.join(testRoot, 'e2e.xlsx'));
 
 const cbrServer = createServer((_req, res) => {
+  const requestedDate = new URL(_req.url, 'http://localhost').searchParams.get('date_req');
+  const bulletin = requestedDate === '01/10/2026'
+    ? { effectiveDate: '01.10.2026', usd: '90,0000', gel: '31,0000' }
+    : requestedDate === '16/10/2026'
+      ? { effectiveDate: '16.10.2026', usd: '91,2500', gel: '32,2642' }
+      : { effectiveDate: '12.10.2026', usd: '91,2500', gel: '32,2642' };
   res.writeHead(200, { 'Content-Type': 'application/xml; charset=windows-1251' });
-  res.end('<?xml version="1.0"?><ValCurs Date="12.10.2026"><Valute><CharCode>USD</CharCode><Nominal>1</Nominal><Value>91,2500</Value></Valute><Valute><CharCode>JPY</CharCode><Nominal>100</Nominal><Value>54,0000</Value></Valute><Valute><CharCode>GEL</CharCode><Nominal>1</Nominal><Value>32,2642</Value></Valute></ValCurs>');
+  res.end(`<?xml version="1.0"?><ValCurs Date="${bulletin.effectiveDate}"><Valute><CharCode>USD</CharCode><Nominal>1</Nominal><Value>${bulletin.usd}</Value></Valute><Valute><CharCode>JPY</CharCode><Nominal>100</Nominal><Value>54,0000</Value></Valute><Valute><CharCode>GEL</CharCode><Nominal>1</Nominal><Value>${bulletin.gel}</Value></Valute></ValCurs>`);
 });
 await new Promise((resolve) => cbrServer.listen(0, '127.0.0.1', resolve));
 

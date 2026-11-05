@@ -47,13 +47,28 @@ async function setup(t, legacy = false, historyRows = 0) {
   await mkdir(backups);
 
   const cbrPort = await freePort();
-  const rates = { comparison: false, firstDayUnavailable: false };
+  const rates = { comparison: false, firstDayUnavailable: false, missingCurrentGel: false, gelMissingAll: false, repeatMissingBulletin: false };
   const requestedDates = [];
   const cbrServer = createServer(async (_req, res) => {
     const requestedDate = new URL(_req.url, 'http://localhost').searchParams.get('date_req');
     requestedDates.push(requestedDate);
     if (rates.gate && requestedDate === '15/03/2019') { rates.started(); await rates.gate; }
     if (rates.unavailable) { res.writeHead(503); res.end('PRIVATE_UPSTREAM'); return; }
+    if (rates.missingCurrentGel && (rates.gelMissingAll || requestedDate === '16/10/2026')) {
+      const [requestedDay, requestedMonth, requestedYear] = requestedDate.split('/');
+      const effectiveDate = rates.gelMissingAll
+        ? (rates.repeatMissingBulletin ? '16.10.2026' : `${requestedDay}.${requestedMonth}.${requestedYear}`)
+        : '16.10.2026';
+      const usd = requestedDate === '15/10/2026' ? '83,5000' : '84,0000';
+      res.writeHead(200, { 'Content-Type': 'application/xml' });
+      res.end(`<ValCurs Date="${effectiveDate}"><Valute><CharCode>USD</CharCode><Nominal>1</Nominal><Value>${usd}</Value></Valute><Valute><CharCode>JPY</CharCode><Nominal>100</Nominal><Value>54,0000</Value></Valute></ValCurs>`);
+      return;
+    }
+    if (rates.missingCurrentGel && requestedDate === '15/10/2026') {
+      res.writeHead(200, { 'Content-Type': 'application/xml' });
+      res.end('<ValCurs Date="15.10.2026"><Valute><CharCode>USD</CharCode><Nominal>1</Nominal><Value>83,5000</Value></Valute><Valute><CharCode>GEL</CharCode><Nominal>1</Nominal><Value>31,5000</Value></Valute></ValCurs>');
+      return;
+    }
     if (rates.firstDayUnavailable) {
       res.writeHead(200, { 'Content-Type': 'application/xml' });
       if (requestedDate.startsWith('01/')) { res.end('<ValCurs Date="01.10.2026"></ValCurs>'); return; }
@@ -61,9 +76,11 @@ async function setup(t, legacy = false, historyRows = 0) {
       return;
     }
     if (rates.comparison) {
-      const rate = requestedDates.at(-1).startsWith('01/') ? '10' : '12';
+      const firstDay = requestedDate.startsWith('01/');
+      const rate = firstDay ? '10' : '12';
+      const usdRate = firstDay ? '80' : '81';
       res.writeHead(200, { 'Content-Type': 'application/xml' });
-      res.end(`<ValCurs Date="14.10.2026"><Valute><CharCode>GEL</CharCode><Nominal>1</Nominal><Value>${rate}</Value></Valute></ValCurs>`);
+      res.end(`<ValCurs Date="14.10.2026"><Valute><CharCode>USD</CharCode><Nominal>1</Nominal><Value>${usdRate}</Value></Valute><Valute><CharCode>GEL</CharCode><Nominal>1</Nominal><Value>${rate}</Value></Valute></ValCurs>`);
       return;
     }
     res.writeHead(200, { 'Content-Type': 'application/xml; charset=windows-1251' });
@@ -700,6 +717,21 @@ function defineScenarios(context, scenario) {
     assert.equal(Array.from({ length: Math.max(0, movementSheet.rowCount - 1) }, (_item, index) => index + 2).some((row) => Number(movementSheet.getCell(row, 5).value) === investment.payload.result.id), false);
     const blockedDelete = await jsonRequest(baseUrl, `/api/savings/accounts/${savingsId}`, { method: 'DELETE' });
     assert.equal(blockedDelete.response.status, 400);
+
+    const capitalOnly = await send('/api/savings/accounts', { name: 'Capital without movements', type: 'Вклад', currency: 'RUB', initialCapital: 25 });
+    assert.equal(capitalOnly.response.status, 201);
+    const beforeCapitalDeleteHash = await sha256(workbook);
+    const beforeCapitalDeleteBackups = await readdir(backups);
+    const rejectedCapitalDelete = await jsonRequest(baseUrl, `/api/savings/accounts/${capitalOnly.payload.result.id}`, { method: 'DELETE' });
+    assert.equal(rejectedCapitalDelete.response.status, 400);
+    assert.equal(await sha256(workbook), beforeCapitalDeleteHash);
+    assert.deepEqual(await readdir(backups), beforeCapitalDeleteBackups);
+    assert.equal((await jsonRequest(baseUrl, '/api/data')).payload.savingsAccounts.some((item) => item.id === capitalOnly.payload.result.id), true);
+
+    const emptySavings = await send('/api/savings/accounts', { name: 'Empty savings', type: 'Отложенные', currency: 'RUB', initialCapital: 0 });
+    assert.equal(emptySavings.response.status, 201);
+    const allowedEmptyDelete = await jsonRequest(baseUrl, `/api/savings/accounts/${emptySavings.payload.result.id}`, { method: 'DELETE' });
+    assert.equal(allowedEmptyDelete.response.status, 200);
   });
 
   scenario('импортирует Syncthing-файл ровно один раз и пишет квитанцию', async () => {
@@ -1214,6 +1246,8 @@ function defineScenarios(context, scenario) {
     await jsonRequest(baseUrl, '/api/data');
     assert.equal(requestedDates.length, callsBeforeCachedRead, 'reading history and balances reuses saved rates');
     rates.comparison = true;
+    const savingsAccount = await send('/api/savings/accounts', { name: 'Сравнение валютных курсов', type: 'Вклад', currency: 'USD', initialCapital: 25 });
+    assert.equal(savingsAccount.response.status, 201);
     const comparisonFixture = await loadWorkbook();
     const balanceSheet = comparisonFixture.getWorksheet('Баланс');
     balanceSheet.getCell(103, 1).value = 'Валютный второй'; balanceSheet.getCell(103, 2).value = 'GEL';
@@ -1230,6 +1264,12 @@ function defineScenarios(context, scenario) {
     assert.equal(gel.difference, gel.amount * 2);
     assert.ok(requestedDates.some((date) => date.startsWith('01/')));
     assert.ok(gel.amount >= 30);
+    const savingsComparison = (await jsonRequest(baseUrl, '/api/balance/currency-comparison?ledger=savings')).payload;
+    const usdSavings = savingsComparison.currencies.find((item) => item.currency === 'USD');
+    assert.equal(usdSavings.amount, 25);
+    assert.equal(usdSavings.firstRate, 80);
+    assert.equal(usdSavings.currentRate, 81);
+    assert.equal(usdSavings.difference, 25);
     rates.comparison = false;
     ids.push(103);
     assert.equal((await send('/api/settings/clear-data', { mode: 'all' })).response.status, 400);
@@ -1644,6 +1684,51 @@ function defineScenarios(context, scenario) {
       assert.equal(busy.response.status, 503);
       assert.equal(busy.payload.retryable, true);
     } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  });
+
+  scenario('CBR current-rate fallback uses the nearest earlier bulletin for both ledgers and persists misses', async () => {
+    rates.missingCurrentGel = true;
+    const first = (await jsonRequest(baseUrl, '/api/data')).payload;
+    assert.equal(first.currentRates.GEL, 31.5);
+    assert.equal(first.currentRateDates.GEL, '2026-10-15');
+    assert.equal(first.accounts.find((account) => account.currency === 'GEL').rateEffectiveDate, '2026-10-15');
+    const rateResponse = (await jsonRequest(baseUrl, '/api/rates?currency=GEL&date=2026-10-16')).payload;
+    assert.equal(rateResponse.requestedDate, '2026-10-16');
+    assert.equal(rateResponse.effectiveDate, '2026-10-15');
+    assert.equal(rateResponse.fallback, true);
+    const mobile = JSON.parse(await readFile(path.join(process.env.FINANCE_SYNC_DIR, 'config', 'balances.json'), 'utf8'));
+    assert.equal(mobile.rates.GEL.rate, 31.5);
+    assert.equal(mobile.rates.GEL.effectiveDate, '2026-10-15');
+
+    const created = await send('/api/savings/accounts', { name: 'GEL savings fallback', type: 'Вклад', currency: 'GEL', initialCapital: 12 });
+    assert.equal(created.response.status, 201);
+    const comparison = (await jsonRequest(baseUrl, '/api/balance/currency-comparison')).payload;
+    assert.equal(comparison.currentRateDates.GEL, '2026-10-15');
+    assert.ok(Number.isFinite(comparison.currentRubTotal));
+    assert.ok(Number.isFinite(comparison.usdTotal));
+    const savingsComparison = (await jsonRequest(baseUrl, '/api/balance/currency-comparison?ledger=savings')).payload;
+    assert.equal(savingsComparison.currentRateDates.GEL, '2026-10-15');
+    assert.ok(Number.isFinite(savingsComparison.currentRubTotal));
+    assert.ok(Number.isFinite(savingsComparison.usdTotal));
+    const downloaded = requestedDates.length;
+    assert.ok(requestedDates.includes('15/10/2026'));
+    await jsonRequest(baseUrl, '/api/data');
+    assert.equal(requestedDates.length, downloaded, 'current missing-currency metadata avoids refetching fallback bulletins');
+  });
+
+  scenario('CBR fallback reports an explicit missing rate after its 31-day search window', async () => {
+    rates.missingCurrentGel = true;
+    rates.gelMissingAll = true;
+    rates.repeatMissingBulletin = true;
+    const result = await jsonRequest(baseUrl, '/api/data');
+    assert.equal(result.response.status, 200);
+    assert.equal(result.payload.currentRates.GEL, null);
+    assert.equal(result.payload.currentRateDates.GEL, null);
+    assert.match(result.payload.currentRateErrors.GEL, /GEL/u);
+    assert.equal(result.payload.accounts.find((account) => account.currency === 'GEL').rubAmount, null);
+    const requestsAfterSearch = requestedDates.length;
+    await jsonRequest(baseUrl, '/api/data');
+    assert.equal(requestedDates.length, requestsAfterSearch, 'the search window is served from persisted bulletin metadata');
   });
 
 }

@@ -412,6 +412,7 @@ function renderOverview() {
   }) : [];
   const operations = [...monthOperations(), ...openingOperations.filter((item) => item.date.startsWith(state.month))];
   const sum = totals(operations);
+  const currentBalanceRub = cachedRubTotal(accounts());
   const net = sum.income - sum.expense;
   const resultNote = sum.income ? `${Math.round((net / sum.income) * 100)}% от доходов` : sum.expense ? 'Нет доходов за период' : 'Нет операций за период';
   const categories = new Map();
@@ -444,6 +445,7 @@ function renderOverview() {
 
   content.innerHTML = `${pageHeader(`Обзор за ${monthLabel(state.month)}`, 'Сводка по книге', true)}
     <label class="overview-opening-toggle"><input id="overview-opening-toggle" type="checkbox" ${state.includeOpeningBalances ? 'checked' : ''}> Учитывать начальные балансы как доход</label>
+    ${currentRateStatusMarkup(accounts())}
     ${state.includeOpeningBalances && (state.data.openingBalances || []).some((item) => accountById(item.accountId)?.currency !== 'RUB' && !(item.rate > 0)) ? '<p role="status">Начальные балансы без исторического курса не включены в доходы.</p>' : ''}
     <div class="dashboard-grid">
       <section class="overview-main">
@@ -451,7 +453,7 @@ function renderOverview() {
       <article class="metric" data-overview-metric="income"><span class="metric-label">Доходы</span><strong class="metric-value">${money(sum.income)}</strong><span class="metric-note">${operationCountLabel(operations.filter((x) => x.type === 'Доход').length)}</span></article>
       <article class="metric" data-overview-metric="expense"><span class="metric-label">Расходы</span><strong class="metric-value">${money(sum.expense)}</strong><span class="metric-note">${operationCountLabel(operations.filter((x) => x.type === 'Расход' || x.type === 'Инвестиция').length)}</span></article>
       <article class="metric accent ${net < 0 ? 'negative' : ''}" data-overview-metric="result"><span class="metric-label">Результат месяца</span><strong class="metric-value">${money(net)}</strong><span class="metric-note">${resultNote}</span></article>
-      <article class="metric" data-overview-metric="balance"><span class="metric-label">Текущий остаток</span><strong class="metric-value">${money(accounts().reduce((a, b) => a + b.rubAmount, 0))}</strong><span class="metric-note">Расчётно по всем активным счетам</span></article>
+      <article class="metric" data-overview-metric="balance"><span class="metric-label">Текущий остаток</span><strong class="metric-value">${currentBalanceRub === null ? '—' : money(currentBalanceRub)}</strong><span class="metric-note">Расчётно по всем активным счетам</span></article>
     </div>
       <article class="card overview-chart-card"><div class="card-head"><h2>Динамика за 6 месяцев</h2><div class="legend"><span><i class="income"></i>Доход</span><span><i class="expense"></i>Расход</span><span><i class="investment"></i>Инвестиции в расходах</span></div></div>
         <div class="chart">${months.map((item) => {
@@ -628,7 +630,9 @@ function accountRowHtml(item = {}) {
   const isNew = !item.id;
   const canDelete = accounts().length > 1;
   const currency = item.currency || 'RUB';
-  return `<tr data-account-row="${item.id || ''}" class="${isNew ? 'new-account-row' : ''}"><td class="account-name-cell"><input name="name" value="${esc(item.name)}" title="${esc(item.name)}" placeholder="Название счёта" required></td><td class="account-currency-cell"><select name="currency" required>${state.data.lists.currencies.map((value) => `<option data-locale-preserve ${value === currency ? 'selected' : ''}>${esc(value)}</option>`).join('')}</select></td><td class="account-rate-cell"><input name="rate" type="number" min="0.000001" step="any" value="${currency === 'RUB' ? '1' : item.rate || ''}" placeholder="${currency === 'RUB' ? '1' : 'Курс ЦБ на сегодня'}" ${currency === 'RUB' ? 'readonly' : ''}></td><td class="money account-balance-cell" data-account-calculated>${number(item.calculatedBalance)} ${esc(currency)}</td><td class="money account-rub-cell">${item.rubAmount === null ? '—' : money(item.rubAmount)}</td><td class="account-actions-cell"><div class="account-row-actions">${isNew ? '<button type="button" class="row-action" data-remove-new-account title="Убрать">×</button>' : `<button type="button" class="row-action danger" data-delete-account="${item.id}" title="${canDelete ? 'Удалить счёт' : 'Нельзя удалить единственный счёт'}" ${canDelete ? '' : 'disabled'}>×</button>`}</div></td></tr>`;
+  const rateDate = item.rateEffectiveDate && item.rateEffectiveDate < state.data?.asOfDate
+    ? `<small class="rate-effective-date">${esc(translate('Курс ЦБ от {date}', { date: dateLabel(item.rateEffectiveDate) }))}</small>` : '';
+  return `<tr data-account-row="${item.id || ''}" class="${isNew ? 'new-account-row' : ''}"><td class="account-name-cell"><input name="name" value="${esc(item.name)}" title="${esc(item.name)}" placeholder="Название счёта" required></td><td class="account-currency-cell"><select name="currency" required>${state.data.lists.currencies.map((value) => `<option data-locale-preserve ${value === currency ? 'selected' : ''}>${esc(value)}</option>`).join('')}</select></td><td class="account-rate-cell"><input name="rate" type="number" min="0.000001" step="any" value="${currency === 'RUB' ? '1' : item.rate || ''}" placeholder="${currency === 'RUB' ? '1' : 'Курс ЦБ на сегодня'}" ${currency === 'RUB' ? 'readonly' : ''}>${rateDate}</td><td class="money account-balance-cell" data-account-calculated>${number(item.calculatedBalance)} ${esc(currency)}</td><td class="money account-rub-cell">${item.rubAmount === null ? '—' : money(item.rubAmount)}</td><td class="account-actions-cell"><div class="account-row-actions">${isNew ? '<button type="button" class="row-action" data-remove-new-account title="Убрать">×</button>' : `<button type="button" class="row-action danger" data-delete-account="${item.id}" title="${canDelete ? 'Удалить счёт' : 'Нельзя удалить единственный счёт'}" ${canDelete ? '' : 'disabled'}>×</button>`}</div></td></tr>`;
 }
 
 function prepareAccountRow(row) {
@@ -654,6 +658,7 @@ function renderBalance() {
     <form id="accounts-form" class="table-card balance-form"><div class="table-wrap"><table class="accounts-table"><thead><tr><th>Счёт</th><th>Валюта</th><th>Курс к рублю</th><th class="numeric-heading">Текущий остаток</th><th class="numeric-heading">Эквивалент в рублях</th><th>Действия</th></tr></thead><tbody>
       ${allAccounts.map((item) => accountRowHtml(item)).join('')}
     </tbody></table></div><div class="balance-actions"><p>Добавление, изменение и удаление сразу обновляют список счетов для Obsidian через Syncthing. Перед каждой записью создаётся бэкап.</p><div><button class="secondary-button" type="button" data-add-account>+ Добавить счёт</button><button class="primary-button" type="submit">Сохранить изменения</button></div></div></form>`;
+  content.querySelector('.balance-hero').insertAdjacentHTML('afterend', currentRateStatusMarkup(active));
   content.querySelectorAll('[data-account-row]').forEach((row) => {
     const accountId = Number(row.dataset.accountRow);
     const currency = row.querySelector('[name="currency"]');
@@ -689,6 +694,21 @@ function cachedRubTotal(accountsToConvert) {
   return total;
 }
 
+function currentRateStatusMarkup(accountsToConvert) {
+  const currencies = new Set([...accountsToConvert.map((account) => account.currency), 'USD']);
+  const asOfDate = state.data?.asOfDate || localIsoDate();
+  const messages = [...currencies].filter((currency) => currency !== 'RUB').flatMap((currency) => {
+    const rate = Number(state.data?.currentRates?.[currency]);
+    const effectiveDate = state.data?.currentRateDates?.[currency];
+    if (!(rate > 0)) return [translate('Курс ЦБ для {currency} не найден за последние {days} дней; рублёвый или USD-итог недоступен.', { currency, days: 31 })];
+    if (effectiveDate && effectiveDate < asOfDate) return [translate('Для {currency} используется курс ЦБ от {date}: публикации на {today} нет.', {
+      currency, date: dateLabel(effectiveDate), today: dateLabel(asOfDate),
+    })];
+    return [];
+  });
+  return messages.length ? `<div class="rate-status" role="status">${messages.map((message) => `<p>${esc(message)}</p>`).join('')}</div>` : '';
+}
+
 async function loadCurrencyComparison(container, ledger = 'main', refresh = false, providedData = null) {
   try {
     const query = new URLSearchParams();
@@ -707,7 +727,7 @@ async function loadCurrencyComparison(container, ledger = 'main', refresh = fals
     const description = translate('Сравнение одной и той же суммы по курсам ЦБ на {firstDay} и {today}. Это не доход или расход за месяц.', {
       firstDay: dateLabel(data.firstDay), today: dateLabel(data.today),
     });
-    container.innerHTML = `<h2>Изменение стоимости текущего остатка</h2><p>${esc(description)}</p><div class="table-wrap"><table><thead><tr><th>Валюта</th><th>Остаток</th><th>Курс на 1-е число</th><th>Курс сегодня</th><th>На 1-е число, ₽</th><th>Сегодня, ₽</th><th>Разница, ₽</th></tr></thead><tbody>${data.currencies.map((item) => `<tr><td>${esc(item.currency)}</td><td>${number(item.amount)}</td>${item.error ? `<td colspan="5">${esc(item.error)}</td>` : `<td title="Курс ЦБ от ${esc(item.firstEffectiveDate)}">${number(item.firstRate, 6)}</td><td title="Курс ЦБ от ${esc(item.currentEffectiveDate)}">${number(item.currentRate, 6)}</td><td>${money(item.firstValue)}</td><td>${money(item.currentValue)}</td><td>${signed(item.difference)}</td>`}</tr>`).join('')}</tbody><tfoot><tr><th colspan="4">Итого по всем счетам</th><td>${data.total ? money(data.total.firstValue) : '—'}</td><td>${data.total ? money(data.total.currentValue) : '—'}</td><td>${data.total ? signed(data.total.difference) : 'Нет всех курсов'}</td></tr></tfoot></table></div>${data.currencies.length ? '' : '<p>Добавьте первый счёт, чтобы сравнивать стоимость остатка.</p>'}`;
+    container.innerHTML = `<h2>Изменение стоимости текущего остатка</h2><p>${esc(description)}</p><div class="table-wrap"><table><thead><tr><th>Валюта</th><th>Остаток</th><th>Курс на 1-е число</th><th>Курс сегодня</th><th>На 1-е число, ₽</th><th>Сегодня, ₽</th><th>Разница, ₽</th></tr></thead><tbody>${data.currencies.map((item) => `<tr><td>${esc(item.currency)}</td><td>${number(item.amount)}</td>${item.error ? `<td colspan="5">${esc(item.error)}</td>` : `<td title="Курс ЦБ от ${esc(item.firstEffectiveDate)}">${number(item.firstRate, 6)}<small class="rate-effective-date">${esc(dateLabel(item.firstEffectiveDate))}</small></td><td title="Курс ЦБ от ${esc(item.currentEffectiveDate)}">${number(item.currentRate, 6)}<small class="rate-effective-date">${esc(dateLabel(item.currentEffectiveDate))}</small></td><td>${money(item.firstValue)}</td><td>${money(item.currentValue)}</td><td>${signed(item.difference)}</td>`}</tr>`).join('')}</tbody><tfoot><tr><th colspan="4">Итого по всем счетам</th><td>${data.total ? money(data.total.firstValue) : '—'}</td><td>${data.total ? money(data.total.currentValue) : '—'}</td><td>${data.total ? signed(data.total.difference) : 'Нет всех курсов'}</td></tr></tfoot></table></div>${data.currencies.length ? '' : '<p>Добавьте первый счёт, чтобы сравнивать стоимость остатка.</p>'}`;
     applyTranslations(container);
   } catch (error) {
     if (container.isConnected) {
@@ -735,6 +755,7 @@ function renderSavings() {
     <section class="card savings-create"><div class="section-title"><h3>Новый накопительный счёт</h3></div><form id="savings-create-form" class="savings-create-form"><label class="field"><span>Название</span><input name="name" maxlength="100" required placeholder="Например, Резервный вклад"></label><label class="field"><span>Тип</span><select name="type"><option value="Отложенные">${translate('Отложенные')}</option><option value="Вклад">${translate('Вклад')}</option></select></label><label class="field"><span>Валюта</span><select name="currency">${currencies.map((value) => `<option data-locale-preserve>${esc(value)}</option>`).join('')}</select></label><label class="field"><span>Начальный капитал</span><input name="initialCapital" type="number" min="0" step="0.01" value="0" required></label><button class="primary-button" type="submit">Добавить счёт</button></form></section>
     <section class="card savings-transfer"><div class="section-title"><h3>Вывод на обычный счёт</h3><span>Пополнение накоплений оформляется как инвестиция</span></div>${mainAccounts.length && savings.length ? `<form id="savings-transfer-form" class="savings-transfer-form"><input type="hidden" name="direction" value="from-savings"><label class="field savings-transfer-savings-account"><span>Счёт накоплений</span><select name="savingAccountId">${savings.map((item) => `<option data-locale-preserve value="${item.id}">${esc(item.name)} · ${esc(item.currency)}</option>`).join('')}</select></label><label class="field savings-transfer-saving-amount"><span>Сумма списания · ${esc(savings[0].currency)}</span><input name="savingAmount" type="number" min="0.000001" step="any" required></label><label class="field savings-transfer-main-account"><span>Обычный счёт для зачисления</span><select name="mainAccountId">${mainAccounts.map((item) => `<option data-locale-preserve value="${item.id}">${esc(item.name)} · ${esc(item.currency)}</option>`).join('')}</select></label><label class="field savings-transfer-main-amount"><span>Сумма зачисления · ${esc(mainAccounts[0].currency)}</span><input name="mainAmount" type="number" min="0.000001" step="any" required></label><label class="field savings-transfer-date"><span>Дата</span><input name="date" type="date" value="${localIsoDate()}" required></label><button class="primary-button savings-transfer-submit" type="submit">Вывести</button></form>` : '<p class="reference-note">Для вывода добавьте хотя бы один счёт в каждом учёте.</p>'}</section>
     <section class="card currency-comparison savings-comparison"><h2>Изменение стоимости текущего остатка</h2></section>`;
+  content.querySelector('.savings-hero').insertAdjacentHTML('afterend', currentRateStatusMarkup(savings));
   const comparison = content.querySelector('.savings-comparison');
   loadCurrencyComparison(comparison, 'savings');
 }
@@ -1320,7 +1341,7 @@ document.addEventListener('click', async (event) => {
   }
   const deleteSavings = event.target.closest('[data-delete-savings]');
   if (deleteSavings) {
-    if (!ask('Удалить этот накопительный счёт? Счёт с историей движения капитала удалить нельзя.')) return;
+    if (!ask('Удалить этот накопительный счёт? Счёт с капиталом или историей движения капитала удалить нельзя.')) return;
     deleteSavings.disabled = true;
     try { await request(`/api/savings/accounts/${deleteSavings.dataset.deleteSavings}`, { method: 'DELETE' }); state.data = await request('/api/data'); render(); notify('Накопительный счёт удалён.'); }
     catch (error) { notify(error.message, 'error'); deleteSavings.disabled = false; }

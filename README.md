@@ -2,7 +2,7 @@
 
 Finance is a local Windows app for managing personal finances in an Excel workbook. It can receive transactions from your phone through Obsidian and Syncthing.
 
-Current version: **1.3.4**. The desktop app and first-run setup are available in English and Russian; choose a language in Settings. Finance Capture is installed and updated through Obsidian Community plugins.
+Current version: **1.4.0**. The desktop app and first-run setup are available in English and Russian; choose a language in Settings. Finance Capture is installed and updated through Obsidian Community plugins.
 
 ## Installation
 
