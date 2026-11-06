@@ -1,3 +1,6 @@
 [submodule "obsidian-plugin/finance-capture"]
 	path = obsidian-plugin/finance-capture
 	url = https://github.com/gmdveast/finance-capture.git
+[submodule "finance-flux"]
+	path = finance-flux
+	url = https://github.com/gmdveast/finance-flux.git
