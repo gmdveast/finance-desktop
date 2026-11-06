@@ -6,12 +6,16 @@ await initializeLocale();
 const content = document.querySelector('#content');
 const dialog = document.querySelector('#operation-dialog');
 const operationForm = document.querySelector('#operation-form');
+const reviewDialog = document.querySelector('#review-inbox-dialog');
 const savingsHistoryDialog = document.querySelector('#savings-history-dialog');
 dialog.addEventListener('click', (event) => {
   if (event.target === dialog) dialog.close();
 });
 savingsHistoryDialog.addEventListener('click', (event) => {
   if (event.target === savingsHistoryDialog) savingsHistoryDialog.close();
+});
+reviewDialog.addEventListener('click', (event) => {
+  if (event.target === reviewDialog) reviewDialog.close();
 });
 const toastStack = document.querySelector('#toast-stack');
 const restoreDialog = document.querySelector('#restore-dialog');
@@ -140,6 +144,49 @@ const localIsoDate = () => {
   const offset = now.getTimezoneOffset() * 60000;
   return new Date(now - offset).toISOString().slice(0, 10);
 };
+
+function pendingAutomaticOperations() {
+  return (state.data?.operations || []).filter((item) => item.automation?.origin === 'automatic' && item.reviewStatus === 'pending')
+    .sort((a, b) => String(b.recordedAt || '').localeCompare(String(a.recordedAt || '')) || b.id - a.id);
+}
+
+function renderReviewIndicator() {
+  const button = document.querySelector('[data-action="review-inbox"]');
+  const badge = document.querySelector('#review-count');
+  if (!button || !badge) return;
+  const count = pendingAutomaticOperations().length;
+  badge.textContent = count > 99 ? '99+' : String(count);
+  badge.hidden = count === 0;
+  const label = count ? translateCount('automaticReviewOperations', count) : translate('Автоматические операции');
+  button.setAttribute('aria-label', label);
+  button.title = label;
+}
+
+function renderReviewInbox() {
+  const list = document.querySelector('#review-inbox-list');
+  const markAll = reviewDialog.querySelector('[data-review-all]');
+  if (!list || !markAll) return;
+  const pending = pendingAutomaticOperations();
+  markAll.hidden = pending.length === 0;
+  if (!pending.length) {
+    list.innerHTML = `<div class="review-inbox-empty">${translate('Новых автоматических операций нет.')}</div>`;
+    return;
+  }
+  list.innerHTML = `<div class="review-operation-list">${pending.map((item) => {
+    const amount = money(item.amount, item.currency);
+    const rubAmount = item.currency === 'RUB' ? '' : ` · ${money(item.rubAmount)}`;
+    const account = item.type === 'Перевод'
+      ? `${accountById(item.accountId)?.name || translate('Счёт')} → ${accountById(item.destinationAccountId)?.name || translate('Счёт назначения')}`
+      : accountById(item.accountId)?.name || translate('Счёт');
+    const category = item.type === 'Перевод' ? translate('Перевод') : categoryLabel(item.category);
+    const note = item.notes || translate('Без заметки');
+    return `<article class="review-operation-card" data-review-card="${item.id}">
+      <div class="review-operation-card-head"><strong>${esc(typeLabel(item.type))} · ${esc(category)}</strong><time class="review-operation-card-date" datetime="${esc(item.date)}">${esc(dateLabel(item.date))}</time></div>
+      <div class="review-operation-details"><strong>${esc(amount)}${esc(rubAmount)}</strong><span>${esc(account)}</span><span class="review-operation-source"><span data-locale-preserve>${esc(item.automation.connectorId)}</span> · <span data-locale-preserve>${esc(item.automation.profileId)}</span></span><span data-locale-preserve>${esc(note)}</span></div>
+      <button type="button" class="secondary-button" data-review-operation="${item.id}">${translate('Отметить проверенной')}</button>
+    </article>`;
+  }).join('')}</div>`;
+}
 
 function notify(message, type = '') {
   const toast = document.createElement('div');
@@ -609,7 +656,7 @@ function operationTable(operations, actions = true, sortable = false) {
   };
   return `<div class="table-wrap${sortable ? ' operations-table-scroll' : ''}"${sortable ? ' role="region" aria-label="Таблица операций"' : ''}><table><thead><tr>${header('date', 'Дата')}<th>Заметка</th>${header('category', 'Категория')}${header('account', 'Счёт')}<th>Тип</th><th>Необходимость</th>${header('amount', 'Сумма', true)}${actions ? '<th>Действия</th>' : ''}</tr></thead><tbody>${operations.map((item) => `<tr class="keyboard-row" tabindex="0" data-keyboard-row data-operation-row="${item.id}" aria-label="Операция ${esc(item.notes || categoryLabel(item.category))}">
     <td class="muted operation-date">${item.recordedAt ? `<time class="operation-time" datetime="${esc(item.recordedAt)}">${timeLabel(item.recordedAt)}</time>` : ''}${dateLabel(item.date)}</td><td class="operation-note"><span>${esc(item.notes || 'Без заметки')}</span>${operationSupplement(item)}</td>
-    <td class="operation-category-label">${item.type === 'Перевод' ? (item.savingsTransfer ? '🏦 Между учётами' : '🔁 Между счетами') : esc(categoryLabel(item.category))}</td><td class="account-route">${item.savingsTransfer === 'investment' ? `${esc(accountById(item.accountId)?.name || 'Счёт')} → ${esc(savingsAccountById(item.savingsAccountId)?.name || 'Накопления')}` : item.savingsTransfer === 'to-savings' ? `${esc(accountById(item.accountId)?.name || 'Счёт')} → ${esc(savingsAccountById(item.savingsAccountId)?.name || 'Накопления')}` : item.savingsTransfer === 'from-savings' ? `${esc(savingsAccountById(item.savingsAccountId)?.name || 'Накопления')} → ${esc(accountById(item.destinationAccountId)?.name || 'Счёт')}` : item.type === 'Перевод' ? `${esc(accountById(item.accountId)?.name || 'Счёт')} → ${esc(accountById(item.destinationAccountId)?.name || 'Счёт')}` : esc(accountById(item.accountId)?.name || 'История без счёта')}</td><td><span class="tag ${item.type === 'Расход' ? 'expense' : item.type === 'Инвестиция' ? 'investment' : item.type === 'Доход' ? 'income' : 'transfer'}">${esc(typeLabel(item.type))}</span></td><td>${item.type === 'Расход' && item.necessity ? `<span class="tag ${item.necessity === 'Гибкая' ? 'flex' : 'required'}">${esc(translate(item.necessity))}</span>` : '<span class="muted">—</span>'}</td>
+    <td class="operation-category-label">${item.type === 'Перевод' ? (item.savingsTransfer ? '🏦 Между учётами' : '🔁 Между счетами') : esc(categoryLabel(item.category))}</td><td class="account-route">${item.savingsTransfer === 'investment' ? `${esc(accountById(item.accountId)?.name || 'Счёт')} → ${esc(savingsAccountById(item.savingsAccountId)?.name || 'Накопления')}` : item.savingsTransfer === 'to-savings' ? `${esc(accountById(item.accountId)?.name || 'Счёт')} → ${esc(savingsAccountById(item.savingsAccountId)?.name || 'Накопления')}` : item.savingsTransfer === 'from-savings' ? `${esc(savingsAccountById(item.savingsAccountId)?.name || 'Накопления')} → ${esc(accountById(item.destinationAccountId)?.name || 'Счёт')}` : item.type === 'Перевод' ? `${esc(accountById(item.accountId)?.name || 'Счёт')} → ${esc(accountById(item.destinationAccountId)?.name || 'Счёт')}` : esc(accountById(item.accountId)?.name || 'История без счёта')}</td><td><div class="operation-type-cell"><span class="tag ${item.type === 'Расход' ? 'expense' : item.type === 'Инвестиция' ? 'investment' : item.type === 'Доход' ? 'income' : 'transfer'}">${esc(typeLabel(item.type))}</span>${item.automation?.origin === 'automatic' ? `<small class="automation-mark ${item.reviewStatus === 'pending' ? 'pending' : ''}">${translate('Автоматически')} · ${translate(item.reviewStatus === 'pending' ? 'На проверку' : 'Проверено')}</small><small class="automation-source" data-locale-preserve>${esc(item.automation.connectorId)} · ${esc(item.automation.profileId)}</small>` : ''}</div></td><td>${item.type === 'Расход' && item.necessity ? `<span class="tag ${item.necessity === 'Гибкая' ? 'flex' : 'required'}">${esc(translate(item.necessity))}</span>` : '<span class="muted">—</span>'}</td>
     <td class="money ${item.type === 'Расход' ? 'expense' : item.type === 'Инвестиция' ? 'investment' : item.type === 'Доход' ? 'income' : ''}">${item.type === 'Расход' || item.type === 'Инвестиция' ? '−' : item.type === 'Доход' ? '+' : '↔ '}${money(item.rubAmount)}</td>
     ${actions ? `<td><div class="row-actions">${['investment', 'from-savings'].includes(item.savingsTransfer) ? `<button class="row-action" data-delete="${item.id}" title="${item.savingsTransfer === 'investment' ? 'Удалить инвестицию и отменить движение средств' : 'Удалить перевод и отменить движение средств'}">×</button>` : item.savingsTransfer ? '<small class="muted">Связанный перевод</small>' : `<button class="row-action" data-edit="${item.id}" title="Редактировать">✎</button><button class="row-action" data-delete="${item.id}" title="Удалить">×</button>`}</div></td>` : ''}</tr>`).join('')}</tbody></table></div>`;
 }
@@ -1159,6 +1206,7 @@ function updateTopbarActions() {
   const addOperation = document.querySelector('[data-action="add-operation"]');
   if (refresh) refresh.hidden = !['balance', 'savings'].includes(state.view);
   if (addOperation) addOperation.hidden = ['phone', 'settings'].includes(state.view);
+  renderReviewIndicator();
 }
 
 function populateOperationForm(type = 'Расход', savingsTransfer = '') {
@@ -1335,6 +1383,36 @@ document.addEventListener('click', async (event) => {
     return;
   }
   if (event.target.closest('[data-close-savings-history]')) { savingsHistoryDialog.close(); return; }
+  if (event.target.closest('[data-action="review-inbox"]')) {
+    renderReviewInbox();
+    reviewDialog.showModal();
+    return;
+  }
+  if (event.target.closest('[data-action="close-review-inbox"]')) { reviewDialog.close(); return; }
+  const reviewOne = event.target.closest('[data-review-operation]');
+  if (reviewOne) {
+    reviewOne.disabled = true;
+    try {
+      const result = await request(`/api/operations/${reviewOne.dataset.reviewOperation}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      state.data = result.data;
+      render();
+      renderReviewInbox();
+      notify(translate('Операция отмечена проверенной.'));
+    } catch (error) { notify(error.message, 'error'); reviewOne.disabled = false; }
+    return;
+  }
+  const reviewAll = event.target.closest('[data-review-all]');
+  if (reviewAll) {
+    reviewAll.disabled = true;
+    try {
+      const result = await request('/api/operations/review-all', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      state.data = result.data;
+      render();
+      renderReviewInbox();
+      notify(translateCount('automaticReviewMarked', result.result.reviewed));
+    } catch (error) { notify(error.message, 'error'); reviewAll.disabled = false; }
+    return;
+  }
   const refreshRatesButton = event.target.closest('[data-action="refresh-rates"]');
   if (refreshRatesButton) { await refreshRatesFromTopbar(refreshRatesButton); return; }
   const recoveryExportButton = event.target.closest('[data-recovery-export]');
@@ -1531,6 +1609,7 @@ document.addEventListener('click', async (event) => {
       const parts = [];
       parts.push(result.listsPublished ? 'Справочники готовы для Syncthing.' : 'Не удалось опубликовать справочники.');
       parts.push(result.balancesPublished ? result.balancesChanged ? 'Балансы обновлены.' : 'Балансы без изменений.' : 'Не удалось обновить балансы.');
+      if (!result.protocolPublished) parts.push('Не удалось опубликовать protocol.json для совместимости.');
       if (result.warnings?.length) parts.push(result.warnings.join('; '));
       notify(parts.join(' '), result.ok ? '' : 'error');
     } catch (error) { notify(error.message, 'error'); }

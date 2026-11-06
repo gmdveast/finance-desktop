@@ -4,8 +4,10 @@ import { contracts, assertContract } from './contract-validation.mjs';
 import { calendarDate, timestamp, numberField, rateField, rowId, publicError, createDiagnostics } from '../lib/input-boundary.mjs';
 
 const operation = { schema: 1, id: 'event-123', author: 'Mobile', createdAt: '2026-10-17T09:00:00Z', operation: { date: '2026-10-17', type: 'Расход', category: 'Еда', amount: 0.000001, currency: 'RUB', accountId: 104 } };
+const operationV2 = { schema: 2, id: 'event-auto-123', author: 'finance-flux', createdAt: operation.createdAt, automation: { connectorId: 'bank.sms', profileId: 'profile-123' }, operation: { ...operation.operation } };
 const samples = {
   operation,
+  operationV2,
   lists: { schema: 1, lists: { accounts: [{ id: 104, name: 'Карта', currency: 'RUB' }] } },
   balances: { schema: 1, generatedAt: operation.createdAt, asOfDate: '2026-10-17', workbook: 'fixture.xlsx', accounts: [], rates: {}, missingRates: [], totalRub: 0 },
   reset: { schema: 1, cutoff: operation.createdAt, ids: ['event-123'] },
@@ -13,12 +15,18 @@ const samples = {
 };
 for (const [name, sample] of Object.entries(samples)) test(`schema ${name}: current and unknown version`, () => {
   assertContract(name, sample);
-  assert.equal(contracts[name]({ ...sample, schema: 2 }), false);
+  assert.equal(contracts[name]({ ...sample, schema: (name === 'operationV2' ? 2 : 1) + 1 }), false);
 });
 test('operation schema rejects invalid dates, amounts and account IDs', () => {
   for (const patch of [{ date: '2026-02-30' }, { amount: 0 }, { amount: 1e9 }, { amount: 0.0000001 }, { amount: '1' }, { accountId: 105 }, { notes: 'x'.repeat(501) }]) {
     assert.equal(contracts.operation({ ...operation, operation: { ...operation.operation, ...patch } }), false, JSON.stringify(patch));
   }
+  assert.equal(contracts.operation({ ...operation, automation: { connectorId: 'bank.sms', profileId: 'profile-123' } }), false);
+  assert.equal(contracts.operation({ ...operation, operation: { ...operation.operation, automation: { connectorId: 'bank.sms', profileId: 'profile-123' } } }), false);
+  assert.equal(contracts.operationV2({ ...operationV2, unexpected: true }), false);
+  assert.equal(contracts.operationV2({ ...operationV2, operation: { ...operationV2.operation, unexpected: true } }), false);
+  assert.equal(contracts.operationV2({ ...operationV2, automation: { ...operationV2.automation, profileId: 'profile:123' } }), false);
+  assert.equal(contracts.operationV2({ ...operationV2, operation: { ...operationV2.operation, amount: '1' } }), false);
   assertContract('lists', { schema: 1, lists: {}, futureField: true });
 });
 test('shared validators preserve precision and reject coercion and impossible dates', () => {

@@ -131,6 +131,22 @@ const sampleOperation = {
   currency: 'RUB', accountId: 5, necessity: 'Обязательная', notes: 'Молоко | хлеб\nПокупка по дороге',
 };
 
+function automaticEvent(id, operation = sampleOperation, createdAt = '2026-10-17T09:00:00.000Z') {
+  return {
+    schema: 2,
+    id,
+    author: 'Finance Flux',
+    createdAt,
+    automation: { connectorId: 'ge-bank-sms', profileId: 'tbc-personal' },
+    operation: { ...operation },
+  };
+}
+
+function automaticCard(event) {
+  const jsonPath = `Finance Sync/incoming/${event.id}.json`;
+  return `---\nfinance_capture: true\nfinance_id: ${JSON.stringify(event.id)}\nfinance_json: ${JSON.stringify(jsonPath)}\ncreated_at: ${JSON.stringify(event.createdAt)}\nfinance_locale: "ru"\n---\n\n# Автоматическая операция\n`;
+}
+
 async function saveTestOperation(plugin, operation) {
   // Explicit account fixture for lifecycle tests; production save still requires synced accounts.
   if (!plugin.captureLists.accounts.length) plugin.captureLists.accounts = [{ id: 5, name: 'Fixture', currency: 'RUB' }];
@@ -729,6 +745,96 @@ test('identity: старый мобильный контракт принима�
   const fresh = await saveTestOperation(plugin, { ...sampleOperation, accountId: 104 });
   await plugin.applyDataReset();
   assert.equal(vault.files.has(fresh.jsonPath), true);
+  plugin.onunload();
+});
+
+test('schema 2: автоматические события учитываются в прогнозе, а неверные и неизвестные события пропускаются', async () => {
+  const { assertContract } = await import('./contract-validation.mjs');
+  const { PluginClass } = loadPlugin();
+  const vault = new FakeVault();
+  const plugin = new PluginClass({ vault });
+  await plugin.onload();
+  plugin.balanceSnapshot = {
+    asOfDate: '2026-10-17',
+    generatedAt: '2026-10-17T10:00:00.000Z',
+    accounts: [{ id: 5, currency: 'RUB' }, { id: 6, currency: 'RUB' }],
+  };
+
+  const events = [
+    automaticEvent('flux-expense-01'),
+    automaticEvent('flux-transfer-01', { ...sampleOperation, type: 'Перевод', amount: 50, destinationAccountId: 6, destinationAmount: 50 }),
+    { schema: 1, id: 'manual-income-01', author: 'Mobile', createdAt: '2026-10-17T09:00:00.000Z', operation: { ...sampleOperation, type: 'Доход', category: 'Работа', amount: 12, accountId: 6 } },
+    { ...automaticEvent('flux-unknown-01'), unsupported: true },
+    { schema: 1, id: 'manual-marker-01', author: 'Mobile', createdAt: '2026-10-17T09:00:00.000Z', automation: { connectorId: 'ge-bank-sms', profileId: 'tbc-personal' }, operation: sampleOperation },
+  ];
+  assertContract('operationV2', events[0]);
+  assertContract('operationV2', events[1]);
+  for (const event of events) await vault.create(`Finance Sync/incoming/${event.id}.json`, JSON.stringify(event));
+
+  await plugin.refreshPendingBalanceImpacts({ notify: false });
+  assert.equal(plugin.pendingBalanceState, 'ready');
+  assert.equal(plugin.pendingBalanceOperationCount, 3);
+  assert.equal(plugin.pendingBalanceSkippedCount, 2);
+  assert.equal(plugin.pendingBalanceChanges.get(5), -470.5);
+  assert.equal(plugin.pendingBalanceChanges.get(6), 62);
+  plugin.onunload();
+});
+
+test('schema 2: карточки архивируются и могут отменить только валидный ожидающий JSON', async () => {
+  const { PluginClass } = loadPlugin();
+  const vault = new FakeVault();
+  const archivedEvent = automaticEvent('flux-archive-01');
+  const cancellableEvent = automaticEvent('flux-cancel-01');
+  const malformedEvent = { ...automaticEvent('flux-invalid-01'), unsupported: true };
+  for (const event of [archivedEvent, cancellableEvent, malformedEvent]) {
+    const jsonPath = `Finance Sync/incoming/${event.id}.json`;
+    const cardPath = `Finance Sync/operations/1 — В очереди — ${event.id}.md`;
+    await vault.create(jsonPath, JSON.stringify(event));
+    await vault.create(cardPath, automaticCard(event));
+  }
+  const plugin = new PluginClass({ vault });
+  await plugin.onload();
+
+  const archivedJson = vault.getAbstractFileByPath(`Finance Sync/incoming/${archivedEvent.id}.json`);
+  await vault.delete(archivedJson);
+  const archivedCardPath = `Finance Sync/operations/2 — Архив — ${archivedEvent.id}.md`;
+  assert.equal(vault.files.has(archivedCardPath), true);
+
+  const cancellableCardPath = `Finance Sync/operations/1 — В очереди — ${cancellableEvent.id}.md`;
+  await vault.delete(vault.getAbstractFileByPath(cancellableCardPath));
+  assert.equal(vault.files.has(`Finance Sync/incoming/${cancellableEvent.id}.json`), false);
+
+  const malformedCardPath = `Finance Sync/operations/1 — В очереди — ${malformedEvent.id}.md`;
+  await vault.delete(vault.getAbstractFileByPath(malformedCardPath));
+  assert.equal(vault.files.has(`Finance Sync/incoming/${malformedEvent.id}.json`), true);
+  plugin.onunload();
+});
+
+test('schema 2: reset cleans validated old queue and cards but retains malformed events', async () => {
+  const { PluginClass } = loadPlugin();
+  const vault = new FakeVault();
+  const oldDate = '2026-10-01T09:00:00.000Z';
+  const oldEvent = automaticEvent('flux-reset-01', sampleOperation, oldDate);
+  const oldTemporaryEvent = automaticEvent('flux-pending-01', sampleOperation, oldDate);
+  const malformedEvent = { ...automaticEvent('flux-badreset-01', sampleOperation, oldDate), unsupported: true };
+  const oldJson = `Finance Sync/incoming/${oldEvent.id}.json`;
+  const oldCard = `Finance Sync/operations/1 — В очереди — ${oldEvent.id}.md`;
+  await vault.create(oldJson, JSON.stringify(oldEvent));
+  await vault.create(oldCard, automaticCard(oldEvent));
+  const pendingPath = `Finance Sync/incoming/${oldTemporaryEvent.id}.pending`;
+  await vault.create(pendingPath, JSON.stringify(oldTemporaryEvent));
+  const malformedPath = `Finance Sync/incoming/${malformedEvent.id}.json`;
+  await vault.create(malformedPath, JSON.stringify(malformedEvent));
+
+  const plugin = new PluginClass({ vault });
+  await plugin.onload();
+  await vault.create('Finance Sync/config/reset.json', JSON.stringify({ schema: 1, cutoff: '2026-10-02T00:00:00.000Z', ids: [] }));
+  await plugin.applyDataReset();
+
+  assert.equal(vault.files.has(oldJson), false);
+  assert.equal(vault.files.has(oldCard), false);
+  assert.equal(vault.files.has(pendingPath), false);
+  assert.equal(vault.files.has(malformedPath), true);
   plugin.onunload();
 });
 

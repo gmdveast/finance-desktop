@@ -5,8 +5,16 @@ import addFormats from 'ajv-formats';
 
 const ajv = new Ajv2020({ strict: false, allErrors: true, multipleOfPrecision: 8 });
 addFormats(ajv);
-export const contracts = Object.fromEntries(['operation', 'lists', 'balances', 'reset', 'receipt'].map((name) => [name,
-  ajv.compile(JSON.parse(readFileSync(new URL(`../contracts/mobile-${name}.schema.json`, import.meta.url), 'utf8'))),
+const contractFiles = {
+  operation: 'operation',
+  operationV2: 'operation-v2',
+  lists: 'lists',
+  balances: 'balances',
+  reset: 'reset',
+  receipt: 'receipt',
+};
+export const contracts = Object.fromEntries(Object.entries(contractFiles).map(([name, file]) => [name,
+  ajv.compile(JSON.parse(readFileSync(new URL(`../contracts/mobile-${file}.schema.json`, import.meta.url), 'utf8'))),
 ]));
 export function assertContract(name, value) {
   assert.equal(contracts[name](value), true, JSON.stringify(contracts[name].errors));

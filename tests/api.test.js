@@ -110,7 +110,7 @@ async function setup(t, legacy = false, historyRows = 0) {
   process.env.CBR_BASE_URL = `http://127.0.0.1:${cbrPort}/daily`;
   process.env.NODE_ENV = 'test';
   const api = await import(`../server.js?api-test=${sandbox}`);
-  const { migrateAccountModel, migrateStreamlinedModel, ensureOperationCapacity, exportMobileBalancesOnce, exportMobileListsOnce, importInboxOnce, synchronizeMobile, startInboxImporter, loadWorkbook, migrateCategoryEmojis, repairTransferRatesOnce, startServer } = api;
+  const { migrateAccountModel, migrateStreamlinedModel, ensureOperationCapacity, exportMobileBalancesOnce, exportMobileListsOnce, exportMobileProtocolOnce, importInboxOnce, synchronizeMobile, startInboxImporter, loadWorkbook, migrateCategoryEmojis, repairTransferRatesOnce, startServer } = api;
   const fixtureWorkbook = await loadWorkbook();
   const balance = fixtureWorkbook.getWorksheet('Баланс');
   for (const [col, value] of [[1, 'Тестовый валютный счёт'], [2, 'GEL'], [4, 32.2642]]) balance.getCell(6, col).value = value;
@@ -136,7 +136,7 @@ async function setup(t, legacy = false, historyRows = 0) {
 }
 
 function defineScenarios(context, scenario) {
-  const { ensureOperationCapacity, exportMobileBalancesOnce, exportMobileListsOnce, importInboxOnce, synchronizeMobile, startInboxImporter, loadWorkbook, migrateCategoryEmojis, repairTransferRatesOnce, sandbox, workbook, backups, cbrCache, baseUrl, requestedDates, rates, setDate } = context;
+  const { ensureOperationCapacity, exportMobileBalancesOnce, exportMobileListsOnce, exportMobileProtocolOnce, importInboxOnce, synchronizeMobile, startInboxImporter, loadWorkbook, migrateCategoryEmojis, repairTransferRatesOnce, sandbox, workbook, backups, cbrCache, baseUrl, requestedDates, rates, setDate } = context;
   const send = (route, body, method = 'POST') => jsonRequest(baseUrl, route, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   scenario('отдаёт интерфейс и структуру всех листов', async () => {
     const page = await fetch(baseUrl);
@@ -788,6 +788,108 @@ function defineScenarios(context, scenario) {
     assert.equal(receipt.duplicate, true);
     assert.equal(receipt.sourceDeleted, true);
     assert.ok((await readdir(backups)).length === 1);
+  });
+
+  scenario('принимает schema 2, сохраняет автоматическое происхождение и позволяет отдельно или пачкой подтвердить записи', async () => {
+    const syncRoot = path.join(sandbox, 'flux-automatic');
+    const initial = (await jsonRequest(baseUrl, '/api/data')).payload;
+    const account = initial.accounts.find((item) => item.active && item.currency === 'RUB');
+    const category = initial.lists.categories.find((item) => item.type === 'Расход');
+    assert.ok(account);
+    assert.ok(category);
+    const incoming = path.join(syncRoot, 'incoming');
+    await mkdir(incoming, { recursive: true });
+    const makeEvent = (id, amount, notes) => ({
+      schema: 2,
+      id,
+      author: 'finance-flux',
+      createdAt: '2026-10-14T12:00:00Z',
+      automation: { connectorId: 'ge-bank-sms', profileId: 'daily-card' },
+      operation: { date: '2026-10-14', type: 'Расход', category: category.name, amount, currency: account.currency, accountId: account.id, notes },
+    });
+    const firstEvent = makeEvent('flux-auto-0001', 10, 'Automatic first');
+    const secondEvent = makeEvent('flux-auto-0002', 20, 'Automatic second');
+    assertContract('operationV2', firstEvent);
+    for (const event of [firstEvent, secondEvent]) {
+      await writeFile(path.join(incoming, `${event.id}.json`), JSON.stringify(event), 'utf8');
+    }
+
+    const protocol = await exportMobileProtocolOnce(syncRoot);
+    assert.equal(protocol.changed, true);
+    assert.deepEqual(protocol.payload.fileSchemas.operation, [1, 2]);
+    assert.ok(protocol.payload.capabilities.includes('automatic-operation-review.v1'));
+    assert.equal(JSON.parse(await readFile(path.join(syncRoot, 'config', 'protocol.json'), 'utf8')).schema, 1);
+
+    const imported = await importInboxOnce(syncRoot);
+    assert.deepEqual(imported.map((item) => item.status), ['imported', 'imported']);
+    assert.equal(imported.every((item) => item.sourceDeleted), true);
+    let data = (await jsonRequest(baseUrl, '/api/data')).payload;
+    const first = data.operations.find((item) => item.sourceId === firstEvent.id);
+    const second = data.operations.find((item) => item.sourceId === secondEvent.id);
+    assert.deepEqual(first.automation, { origin: 'automatic', connectorId: 'ge-bank-sms', profileId: 'daily-card' });
+    assert.equal(first.reviewStatus, 'pending');
+    assert.equal(first.reviewedAt, null);
+    assert.equal(second.reviewStatus, 'pending');
+    assert.equal(data.accounts.find((item) => item.id === account.id).calculatedBalance, account.calculatedBalance - 30);
+
+    const excel = await loadWorkbook();
+    const sheet = excel.getWorksheet('Операции');
+    assert.deepEqual([20, 21, 22, 23, 24].map((column) => sheet.getCell(4, column).value), ['Источник', 'ID коннектора', 'ID профиля', 'Проверка', 'Проверено в']);
+    assert.deepEqual([20, 21, 22, 23, 24].map((column) => sheet.getCell(first.id, column).value), ['automatic', 'ge-bank-sms', 'daily-card', 'pending', null]);
+    assert.deepEqual([20, 21, 22, 23, 24].map((column) => sheet.getCell(second.id, column).value), ['automatic', 'ge-bank-sms', 'daily-card', 'pending', null]);
+
+    const editedAutomatic = await send(`/api/operations/${first.id}`, { ...first, notes: 'Corrected automatic note' }, 'PUT');
+    assert.equal(editedAutomatic.response.status, 200);
+    const editedOperation = editedAutomatic.payload.data.operations.find((item) => item.id === first.id);
+    assert.deepEqual(editedOperation.automation, first.automation);
+    assert.equal(editedOperation.reviewStatus, 'pending');
+    assert.equal(editedOperation.notes, 'Corrected automatic note');
+
+    const backupCount = async () => (await readdir(backups)).length;
+    const afterImports = await backupCount();
+    const reviewedOne = await send(`/api/operations/${first.id}/review`, {});
+    assert.equal(reviewedOne.response.status, 200);
+    assert.equal(reviewedOne.payload.result.reviewed, 1);
+    assert.equal(reviewedOne.payload.data.operations.find((item) => item.id === first.id).reviewStatus, 'confirmed');
+    assert.ok(reviewedOne.payload.data.operations.find((item) => item.id === first.id).reviewedAt);
+    assert.equal(await backupCount(), afterImports + 1);
+
+    const reviewedAll = await send('/api/operations/review-all', {});
+    assert.equal(reviewedAll.response.status, 200);
+    assert.equal(reviewedAll.payload.result.reviewed, 1);
+    assert.equal(reviewedAll.payload.data.operations.find((item) => item.id === second.id).reviewStatus, 'confirmed');
+    const afterReview = await backupCount();
+    assert.equal(afterReview, afterImports + 2);
+    const noPending = await send('/api/operations/review-all', {});
+    assert.equal(noPending.payload.result.reviewed, 0);
+    assert.equal(await backupCount(), afterReview);
+
+    await writeFile(path.join(incoming, `${firstEvent.id}.json`), JSON.stringify(firstEvent), 'utf8');
+    const duplicate = await importInboxOnce(syncRoot);
+    assert.equal(duplicate[0].duplicate, true);
+    assert.equal(await backupCount(), afterReview);
+    data = (await jsonRequest(baseUrl, '/api/data')).payload;
+    assert.equal(data.operations.find((item) => item.id === first.id).reviewStatus, 'confirmed');
+
+    const incomeCategory = data.lists.categories.find((item) => item.type === 'Доход');
+    const manual = await send('/api/operations', { date: '2026-10-14', type: 'Доход', category: incomeCategory.name, amount: 5, currency: account.currency, accountId: account.id });
+    assert.equal(manual.response.status, 201);
+    assert.equal(manual.payload.data.operations.find((item) => item.id === manual.payload.result.id).automation, undefined);
+    assert.equal(manual.payload.data.operations.find((item) => item.id === manual.payload.result.id).reviewStatus, undefined);
+
+    const legacyFlagEvent = {
+      schema: 1,
+      id: 'legacy-auto-0001',
+      author: 'old-capture',
+      createdAt: '2026-10-14T12:00:00Z',
+      operation: { ...firstEvent.operation, automation: firstEvent.automation },
+    };
+    const legacyFlagPath = path.join(incoming, `${legacyFlagEvent.id}.json`);
+    await writeFile(legacyFlagPath, JSON.stringify(legacyFlagEvent), 'utf8');
+    const rejectedLegacyMarker = await importInboxOnce(syncRoot);
+    assert.equal(rejectedLegacyMarker[0].status, 'error');
+    assert.equal(await readFile(legacyFlagPath, 'utf8'), JSON.stringify(legacyFlagEvent));
+    assert.equal(await backupCount(), afterReview + 1);
   });
 
   scenario('кнопка выполняет полный цикл, сохраняет ошибочные файлы и безопасно повторяет импорт', async () => {

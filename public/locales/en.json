@@ -8,9 +8,29 @@
     "activeAccounts": {
       "one": "{count} active account",
       "other": "{count} active accounts"
+    },
+    "automaticReviewOperations": {
+      "one": "{count} automatic operation needs review",
+      "other": "{count} automatic operations need review"
+    },
+    "automaticReviewMarked": {
+      "one": "Marked {count} operation as reviewed",
+      "other": "Marked {count} operations as reviewed"
     }
   },
   "messages": {
+    "Очередь автоматических операций": "Automatic operations inbox",
+    "Автоматическая запись": "Automatic capture",
+    "Автоматические операции": "Automatic operations",
+    "Эти операции уже учтены в остатках и аналитике. Отметьте их проверенными после просмотра.": "These operations already count toward balances and analytics. Mark them reviewed after checking them.",
+    "Новых автоматических операций нет.": "No new automatic operations.",
+    "Отметить все проверенными": "Mark all as reviewed",
+    "Отметить проверенной": "Mark as reviewed",
+    "Операция отмечена проверенной.": "Operation marked as reviewed.",
+    "Автоматически": "Automatic",
+    "На проверку": "Needs review",
+    "Проверено": "Reviewed",
+    "Не удалось опубликовать protocol.json для совместимости.": "Could not publish protocol.json for compatibility.",
     "Финансовый журнал": "Finance journal",
     "Финансы": "Finance",
     "личный журнал": "personal journal",

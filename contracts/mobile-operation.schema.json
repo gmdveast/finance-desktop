@@ -4,6 +4,9 @@
   "title": "Mobile finance operation",
   "type": "object",
   "additionalProperties": true,
+  "not": {
+    "required": ["automation"]
+  },
   "required": [
     "schema",
     "id",
@@ -32,6 +35,9 @@
     "operation": {
       "type": "object",
       "additionalProperties": true,
+      "not": {
+        "required": ["automation"]
+      },
       "required": [
         "date",
         "type",

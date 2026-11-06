@@ -1,0 +1,20 @@
+{
+  "schema": 2,
+  "id": "event-7f3c5b8a",
+  "author": "finance-flux",
+  "createdAt": "2026-11-05T12:00:00Z",
+  "automation": {
+    "connectorId": "georgian-bank.sms",
+    "profileId": "profile-7f3c5b8a"
+  },
+  "operation": {
+    "date": "2026-11-05",
+    "type": "Расход",
+    "category": "Продукты",
+    "amount": 24.5,
+    "currency": "GEL",
+    "rate": 31.5,
+    "accountId": 6,
+    "notes": "Магазин"
+  }
+}

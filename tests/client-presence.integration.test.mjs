@@ -73,7 +73,7 @@ test('normal application lifecycle accepts tab presence and drains before releas
   });
 
   const { startApplication } = await import('../server.js?presence-integration-test');
-  application = await startApplication(0, { presenceOptions: { leaseMs: 1000, shutdownGraceMs: 40, startupGraceMs: 1000 } });
+  application = await startApplication(0, { presenceOptions: { leaseMs: 1000, shutdownGraceMs: 40, startupGraceMs: 10_000 } });
   const baseUrl = `http://127.0.0.1:${application.server.address().port}`;
   await exercisePresence(application.server, application.stop, baseUrl, '/api/settings');
 
@@ -110,7 +110,7 @@ test('first-run lifecycle also stops after the final tab leaves', async (t) => {
     dataDirectory: path.dirname(workbookPath),
     syncDirectory: path.join(root, 'sync'),
     workbookStore,
-    presenceOptions: { leaseMs: 1000, shutdownGraceMs: 40, startupGraceMs: 1000 },
+    presenceOptions: { leaseMs: 1000, shutdownGraceMs: 40, startupGraceMs: 10_000 },
     onInstalled: async () => {},
   });
   const baseUrl = `http://127.0.0.1:${setup.server.address().port}`;

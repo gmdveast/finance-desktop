@@ -48,6 +48,7 @@
           </div>
         </div>
         <div class="topbar-actions">
+          <button class="secondary-button review-inbox-trigger" type="button" data-action="review-inbox" data-locale-preserve aria-label="Очередь автоматических операций" title="Очередь автоматических операций"><span class="topbar-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg></span><span class="review-count" id="review-count" hidden></span></button>
           <button class="secondary-button" type="button" data-action="refresh-rates" aria-label="Обновить курсы ЦБ" title="Обновить курсы ЦБ"><span class="topbar-icon topbar-icon-text" aria-hidden="true">↻</span><span class="desktop-label">Обновить курсы</span><span class="mobile-label">Курсы</span></button>
           <button class="primary-button" type="button" data-action="add-operation" aria-label="Новая операция"><span class="topbar-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></span><span class="desktop-label">Новая операция</span><span class="mobile-label">Новая</span></button>
         </div>
@@ -94,6 +95,18 @@
         <button type="submit" class="primary-button" id="save-operation">Сохранить в Excel</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="review-inbox-dialog" class="dialog review-inbox-dialog" aria-labelledby="review-inbox-title">
+    <div class="review-inbox-content">
+      <div class="dialog-head">
+        <div><p class="eyebrow">Автоматическая запись</p><h2 id="review-inbox-title">Автоматические операции</h2></div>
+        <button type="button" class="icon-button" data-action="close-review-inbox" aria-label="Закрыть">×</button>
+      </div>
+      <p class="review-inbox-explainer">Эти операции уже учтены в остатках и аналитике. Отметьте их проверенными после просмотра.</p>
+      <div id="review-inbox-list"></div>
+      <div class="dialog-actions review-inbox-actions"><button type="button" class="secondary-button" data-review-all>Отметить все проверенными</button></div>
+    </div>
   </dialog>
 
   <dialog id="savings-history-dialog" class="dialog savings-history-dialog" aria-labelledby="savings-history-title">

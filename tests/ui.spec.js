@@ -51,6 +51,63 @@ test.beforeEach(async ({ page }) => {
   await page.clock.setFixedTime(new Date(TEST_INSTANT));
 });
 
+scenario('автоматические операции сразу видны, а очередь отдельно подтверждает одну или все записи', async ({ page, request, financeServer }) => {
+  await page.addInitScript(() => localStorage.setItem('finance:locale', 'en'));
+  const data = await (await request.get('/api/data')).json();
+  const account = data.accounts.find((item) => item.active);
+  const category = data.lists.categories.find((item) => item.type === 'Расход');
+  expect(account).toBeTruthy();
+  expect(category).toBeTruthy();
+  const root = financeServer.syncRoot;
+  const incoming = path.join(root, 'incoming');
+  await mkdir(incoming, { recursive: true });
+  const makeEvent = (id, notes) => ({
+    schema: 2,
+    id,
+    author: 'finance-flux',
+    createdAt: '2026-10-14T12:00:00Z',
+    automation: { connectorId: 'ge-bank-sms', profileId: 'daily-card' },
+    operation: { date: '2026-10-14', type: 'Расход', category: category.name, amount: 12, currency: account.currency, accountId: account.id, notes },
+  });
+  const firstId = 'flux-ui-auto-0001';
+  const secondId = 'flux-ui-auto-0002';
+  for (const event of [makeEvent(firstId, 'first automatic'), makeEvent(secondId, 'second automatic')]) {
+    await writeFile(path.join(incoming, `${event.id}.json`), JSON.stringify(event), 'utf8');
+  }
+  const imported = await request.post('/api/settings/export-mobile');
+  expect(imported.ok(), await imported.text()).toBeTruthy();
+  expect((await imported.json()).imported).toBe(2);
+  const importedData = await (await request.get('/api/data')).json();
+  const firstOperationId = importedData.operations.find((item) => item.sourceId === firstId)?.id;
+  expect(firstOperationId).toBeTruthy();
+
+  await page.goto('/#operations');
+  const bell = page.locator('[data-action="review-inbox"]');
+  await expect(bell).toHaveAttribute('aria-label', '2 automatic operations need review');
+  await expect(page.locator('#review-count')).toHaveText('2');
+  await expect(page.locator('.automation-mark')).toHaveCount(2);
+  await expect(page.locator('.automation-mark.pending')).toHaveCount(2);
+  await expect(page.locator('.automation-source')).toHaveCount(2);
+  await expect(page.locator('.automation-source').first()).toContainText('ge-bank-sms');
+
+  await bell.click();
+  const dialog = page.locator('#review-inbox-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: 'Automatic operations' })).toBeVisible();
+  await expect(dialog.locator('.review-operation-card')).toHaveCount(2);
+  await expect(dialog).toContainText('These operations already count toward balances and analytics.');
+  await dialog.locator(`[data-review-card="${firstOperationId}"] [data-review-operation]`).click();
+  await expect(page.locator('#review-count')).toHaveText('1');
+  await expect(dialog.locator('.review-operation-card')).toHaveCount(1);
+
+  await dialog.locator('[data-review-all]').click();
+  await expect(page.locator('#review-count')).toBeHidden();
+  await expect(dialog.locator('.review-inbox-empty')).toHaveText('No new automatic operations.');
+  await expect(dialog.locator('[data-review-all]')).toBeHidden();
+  await expect(page.locator('.automation-mark.pending')).toHaveCount(0);
+  await expect(page.locator('.automation-mark')).toHaveCount(2);
+});
+
 scenario('настройки отдельно показывают обновление desktop и Finance Capture через Obsidian', async ({ page }) => {
   await page.route('**/api/updates/check', (route) => route.fulfill({
     status: 200,
@@ -202,9 +259,9 @@ scenario('настройки выравнивают кнопки по нижне
       iconContents: icons.map((icon) => icon.textContent.trim() || (icon.querySelector('svg') ? 'svg' : '')),
     };
   });
-  expect(topbarStyles.gaps).toEqual(['8px', '8px']);
-  expect(topbarStyles.iconWidths).toEqual(['18px', '18px']);
-  expect(topbarStyles.iconContents).toEqual(['↻', 'svg']);
+  expect(topbarStyles.gaps).toEqual(['8px', '8px', '8px']);
+  expect(topbarStyles.iconWidths).toEqual(['18px', '18px', '18px']);
+  expect(topbarStyles.iconContents).toEqual(['svg', '↻', 'svg']);
 
   const logoStyle = await page.locator('.brand-mark').evaluate((mark) => ({
     background: getComputedStyle(mark).backgroundColor,
@@ -515,7 +572,7 @@ scenario('подключение телефона необязательно и 
   const beforeData = await (await request.get('/api/data')).json();
   const published = await request.post('/api/settings/publish-mobile');
   expect(published.ok()).toBeTruthy();
-  expect(await published.json()).toMatchObject({ listsPublished: true, balancesPublished: true });
+  expect(await published.json()).toMatchObject({ listsPublished: true, balancesPublished: true, protocolPublished: true });
   const afterSnapshot = await (await request.get('/api/snapshot')).json();
   const afterData = await (await request.get('/api/data')).json();
   expect(afterSnapshot.revision).toBe(beforeSnapshot.revision);
@@ -1982,8 +2039,11 @@ scenario('a new foreign account shows a popup and stays unsaved without its CBR 
 
 scenario('amount fields reject letters and unsupported symbols', async ({ page }) => {
   await page.goto('/#overview');
+  await expect(page.locator('#workbook-name')).not.toHaveText('загрузка…');
   await page.locator('[data-action="add-operation"]').click();
+  await expect(page.locator('#operation-dialog')).toBeVisible();
   const amount = page.locator('#operation-form [name="amount"]');
+  await expect(amount).toBeVisible();
   await amount.fill('12abc$');
   expect(await amount.evaluate((input) => input.validity.valid)).toBe(false);
   const operationPosts = [];

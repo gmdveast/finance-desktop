@@ -50,6 +50,8 @@ const ACCOUNT_END_ROW = 14;
 const ACCOUNT_MAX_ROW = 104;
 const SYSTEM_OPERATION_TYPES = ['Доход', 'Расход', 'Перевод', 'Инвестиция'];
 const MOBILE_OPERATION_TYPES = ['Доход', 'Расход', 'Перевод'];
+const AUTOMATION_COLUMN_START = 20;
+const AUTOMATION_HEADERS = ['Источник', 'ID коннектора', 'ID профиля', 'Проверка', 'Проверено в'];
 const SYSTEM_INVESTMENT_CATEGORIES = [
   { name: 'Вклад', type: 'Инвестиция' },
   { name: 'Отложенные', type: 'Инвестиция' },
@@ -72,6 +74,7 @@ let syncQueue = Promise.resolve();
 const syncRuns = new Map();
 let cbrCacheLoadPromise = null;
 let cbrCacheWriteQueue = Promise.resolve();
+let protocolWriteQueue = Promise.resolve();
 let shuttingDown = false;
 let clientPresence = null;
 const importerStops = new Set();
@@ -546,6 +549,29 @@ export async function publishMobileSnapshotOnce(rootDirectory = SYNC_DIR) {
   });
 }
 
+export function exportMobileProtocolOnce(rootDirectory = SYNC_DIR) {
+  const snapshot = {
+    schema: 1,
+    application: 'finance-desktop',
+    version: RELEASE_INFO.version,
+    fileSchemas: { operation: [1, 2], lists: [1], balances: [1], reset: [1], receipt: [1] },
+    capabilities: ['automatic-operation-review.v1'],
+  };
+  const task = protocolWriteQueue.then(async () => {
+    const target = path.join(rootDirectory, 'config', 'protocol.json');
+    const existing = await readFile(target, 'utf8').then((text) => JSON.parse(text)).catch(() => null);
+    if (existing?.generatedAt) {
+      const { generatedAt: _generatedAt, ...existingSnapshot } = existing;
+      if (JSON.stringify(existingSnapshot) === JSON.stringify(snapshot)) return { changed: false, path: target, payload: existing };
+    }
+    const payload = { ...snapshot, generatedAt: new Date().toISOString() };
+    await writeJsonAtomic(target, payload);
+    return { changed: true, path: target, payload };
+  });
+  protocolWriteQueue = task.catch(() => {});
+  return task;
+}
+
 async function prepareBalanceRates() {
   const workbook = await loadWorkbook();
   const date = localIsoDate();
@@ -600,6 +626,7 @@ async function publishMobileBalances(rootDirectory, workbook) {
 
 function readOperations(workbook) {
   const sheet = workbook.getWorksheet('Операции');
+  const automationColumnsEnabled = hasOperationAutomationColumns(sheet);
   const operations = [];
   for (let row = 5; row <= sheet.rowCount; row += 1) {
     const values = [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map((column) => sheet.getCell(row, column).value);
@@ -609,6 +636,7 @@ function readOperations(workbook) {
     const rate = currency === 'RUB' ? 1 : asNumber(sheet.getCell(row, 7).value);
     const type = clean(sheet.getCell(row, 2).value);
     const storedCategory = clean(sheet.getCell(row, 3).value);
+    const automation = automationColumnsEnabled ? readOperationAutomation(sheet, row) : null;
     operations.push({
       id: row,
       date: dateToIso(sheet.getCell(row, 1).value),
@@ -628,6 +656,7 @@ function readOperations(workbook) {
       savingsAccountId: asNumber(sheet.getCell(row, 17).value) || null,
       savingsAmount: asNumber(sheet.getCell(row, 18).value),
       recordedAt: timestamp(clean(sheet.getCell(row, 19).value)) ? new Date(sheet.getCell(row, 19).value).toISOString() : null,
+      ...(automation || {}),
     });
   }
   return operations.sort((a, b) => b.date.localeCompare(a.date)
@@ -636,11 +665,53 @@ function readOperations(workbook) {
     || b.id - a.id);
 }
 
+function hasOperationAutomationColumns(sheet) {
+  return AUTOMATION_HEADERS.every((header, index) => clean(sheet.getCell(4, AUTOMATION_COLUMN_START + index).value) === header);
+}
+
+function readOperationAutomation(sheet, row) {
+  const [origin, connectorId, profileId, reviewStatus, reviewedAt] = AUTOMATION_HEADERS.map((_, index) => clean(sheet.getCell(row, AUTOMATION_COLUMN_START + index).value));
+  if (![origin, connectorId, profileId, reviewStatus, reviewedAt].some(Boolean)) return null;
+  if (origin !== 'automatic'
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(connectorId)
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profileId)
+    || !['pending', 'confirmed'].includes(reviewStatus)
+    || (reviewStatus === 'pending' && reviewedAt)
+    || (reviewStatus === 'confirmed' && !timestamp(reviewedAt))) {
+    throw new InputError('Метаданные автоматической операции повреждены; книга не изменена.', 409, 'AUTOMATION_METADATA_INVALID');
+  }
+  return {
+    automation: { origin, connectorId, profileId },
+    reviewStatus,
+    reviewedAt: reviewedAt ? new Date(reviewedAt).toISOString() : null,
+  };
+}
+
+function ensureOperationAutomationColumns(sheet) {
+  if (hasOperationAutomationColumns(sheet)) {
+    for (let index = 0; index < AUTOMATION_HEADERS.length; index += 1) sheet.hideColumn(AUTOMATION_COLUMN_START + index);
+    return;
+  }
+  const existingHeaders = AUTOMATION_HEADERS.map((_, index) => clean(sheet.getCell(4, AUTOMATION_COLUMN_START + index).value));
+  if (existingHeaders.some(Boolean)) throw new InputError('Столбцы T:X уже заняты или имеют несовместимые заголовки. Автоматическая операция не импортирована.', 409, 'AUTOMATION_COLUMNS_CONFLICT');
+  for (const reference of sheet.cells.keys()) {
+    const row = Number(reference.match(/\d+$/)?.[0] || 0);
+    const column = columnNumber(reference.match(/^[A-Z]+/)?.[0] || 'A');
+    if (row < 5 || column < AUTOMATION_COLUMN_START || column >= AUTOMATION_COLUMN_START + AUTOMATION_HEADERS.length) continue;
+    if (clean(sheet.getCell(row, column).value)) throw new InputError('В столбцах T:X уже есть данные. Автоматическая операция не импортирована.', 409, 'AUTOMATION_COLUMNS_CONFLICT');
+  }
+  AUTOMATION_HEADERS.forEach((header, index) => {
+    const column = AUTOMATION_COLUMN_START + index;
+    sheet.getCell(4, column).value = header;
+    sheet.hideColumn(column);
+  });
+}
+
 export function operationCapacity(workbook) {
   const sheet = workbook.getWorksheet('\u041e\u043f\u0435\u0440\u0430\u0446\u0438\u0438');
   let used = 0;
   for (let row = 5; row <= sheet.rowCount; row += 1) {
-    if ([1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].some((column) => clean(sheet.getCell(row, column).value))) used += 1;
+    if ([1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24].some((column) => clean(sheet.getCell(row, column).value))) used += 1;
   }
   return { startRow: 5, endRow: sheet.rowCount, total: Math.max(0, sheet.rowCount - 4), used, available: Math.max(0, sheet.rowCount - 4 - used) };
 }
@@ -1444,6 +1515,14 @@ function writeOperation(sheet, row, operation) {
     : (timestamp(operation.sourceCreatedAt || '') ? new Date(operation.sourceCreatedAt).toISOString() : new Date().toISOString());
   sheet.getCell(row, 19).value = recordedAt;
   sheet.hideColumn(19);
+  if (operation.automation) ensureOperationAutomationColumns(sheet);
+  if (operation.automation || hasOperationAutomationColumns(sheet)) {
+    const values = operation.automation
+      ? ['automatic', operation.automation.connectorId, operation.automation.profileId, operation.reviewStatus || 'pending', operation.reviewedAt || null]
+      : [null, null, null, null, null];
+    values.forEach((value, index) => { sheet.getCell(row, AUTOMATION_COLUMN_START + index).value = value || null; });
+    for (let index = 0; index < AUTOMATION_HEADERS.length; index += 1) sheet.hideColumn(AUTOMATION_COLUMN_START + index);
+  }
   if (operation.savingsTransfer) {
     sheet.hideColumn(16); sheet.hideColumn(17); sheet.hideColumn(18);
   }
@@ -1595,6 +1674,11 @@ async function createOperation(body, options = {}) {
     }
     const operation = validateOperation(body);
     if (options.recordedAt !== undefined) operation.recordedAt = options.recordedAt;
+    if (options.automation) {
+      operation.automation = options.automation;
+      operation.reviewStatus = 'pending';
+      operation.reviewedAt = null;
+    }
     validateOperationAccounts(workbook, operation);
     if (operation.type === 'Перевод') operation.rate = (await fetchCbrRate(operation.currency, operation.date)).rate;
     await prepareOperationReferenceRates(workbook, operation);
@@ -1605,7 +1689,7 @@ async function createOperation(body, options = {}) {
     }
     let targetRow = 0;
     for (let row = 5; row <= sheet.rowCount; row += 1) {
-      const hasData = [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].some((column) => clean(sheet.getCell(row, column).value));
+      const hasData = [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24].some((column) => clean(sheet.getCell(row, column).value));
       if (!hasData) { targetRow = row; break; }
     }
     if (!targetRow) {
@@ -1622,6 +1706,27 @@ async function createOperation(body, options = {}) {
     const capacity = ensureOperationCapacity(workbook);
     return { id: targetRow, duplicate: false, capacity };
   }, options);
+}
+
+function reviewAutomaticOperations(workbook, { row = null } = {}) {
+  const sheet = workbook.getWorksheet('Операции');
+  if (row !== null) {
+    const operation = readOperations(workbook).find((item) => item.id === row);
+    if (!operation?.automation) throw new InputError('Автоматическая операция не найдена.', 404, 'NOT_FOUND');
+    if (operation.reviewStatus === 'confirmed') return { skipSave: true, result: { reviewed: 0, alreadyReviewed: true, id: row } };
+    const reviewedAt = new Date().toISOString();
+    sheet.getCell(row, AUTOMATION_COLUMN_START + 3).value = 'confirmed';
+    sheet.getCell(row, AUTOMATION_COLUMN_START + 4).value = reviewedAt;
+    return { reviewed: 1, id: row, reviewedAt };
+  }
+  const pending = readOperations(workbook).filter((item) => item.automation?.origin === 'automatic' && item.reviewStatus === 'pending');
+  if (!pending.length) return { skipSave: true, result: { reviewed: 0 } };
+  const reviewedAt = new Date().toISOString();
+  for (const operation of pending) {
+    sheet.getCell(operation.id, AUTOMATION_COLUMN_START + 3).value = 'confirmed';
+    sheet.getCell(operation.id, AUTOMATION_COLUMN_START + 4).value = reviewedAt;
+  }
+  return { reviewed: pending.length, reviewedAt };
 }
 
 async function loadCbrRateCache() {
@@ -1848,14 +1953,30 @@ async function pruneReceipts(directory, retentionDays = RECEIPT_RETENTION_DAYS) 
 
 function validateInboxEvent(event) {
   object(event);
-  if (event.schema !== 1) throw new InputError('Поддерживается только schema: 1.');
+  if (![1, 2].includes(event.schema)) throw new InputError('Поддерживаются только schema: 1 и 2.');
   const id = textField(event.id, 128, 'id');
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{5,127}$/.test(id)) throw new InputError('Поле id отсутствует или имеет неверный формат.');
+  const idPattern = event.schema === 2 ? /^[A-Za-z0-9][A-Za-z0-9._-]{5,127}$/ : /^[A-Za-z0-9][A-Za-z0-9._:-]{5,127}$/;
+  if (!idPattern.test(id)) throw new InputError('Поле id отсутствует или имеет неверный формат.');
   const author = textField(event.author, 80, 'author');
   if (!timestamp(event.createdAt)) throw new InputError('Некорректный createdAt: нужен ISO timestamp с часовым поясом.');
   object(event.operation);
   if (!author) throw new InputError('Поле author обязательно.');
-  return { id, author };
+  if (event.schema === 1) {
+    if (event.automation !== undefined || event.operation.automation !== undefined) throw new InputError('Метка automation требует schema: 2.');
+    return { id, author, automation: null };
+  }
+  const rootFields = new Set(['schema', 'id', 'author', 'createdAt', 'automation', 'operation']);
+  if (Object.keys(event).some((key) => !rootFields.has(key))) throw new InputError('В schema 2 есть неподдерживаемое поле.');
+  const operationFields = new Set(['date', 'type', 'category', 'amount', 'currency', 'rate', 'necessity', 'notes', 'accountId', 'destinationAccountId', 'destinationAmount']);
+  if (Object.keys(event.operation).some((key) => !operationFields.has(key))) throw new InputError('В операции schema 2 есть неподдерживаемое поле.');
+  object(event.automation);
+  if (Object.keys(event.automation).some((key) => !['connectorId', 'profileId'].includes(key))) throw new InputError('В automation есть неподдерживаемое поле.');
+  const connectorId = textField(event.automation.connectorId, 64, 'connectorId');
+  const profileId = textField(event.automation.profileId, 64, 'profileId');
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(connectorId) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(profileId)) {
+    throw new InputError('Некорректный идентификатор источника или профиля автоматической операции.');
+  }
+  return { id, author, automation: { origin: 'automatic', connectorId, profileId } };
 }
 
 // Backward-compatible array result for integrations; all entry points use the coordinator.
@@ -1889,7 +2010,7 @@ async function scanInboxOnce(rootDirectory) {
           assertIdentityAvailable(knownIdentity);
           if (!knownIdentity.events.has(identity.id) && !(await isResetEvent(snapshot, identity.id, event.createdAt))) operation.rate = (await fetchCbrRate(clean(operation.currency), clean(operation.date))).rate;
         }
-        const payload = await createOperation(operation, { publish: false, includeData: false, recordedAt: event.createdAt });
+        const payload = await createOperation(operation, { publish: false, includeData: false, recordedAt: event.createdAt, automation: identity.automation });
         const receipt = {
           schema: 1,
           id: identity.id,
@@ -2115,7 +2236,7 @@ app.post('/api/settings/clear-data', async (req, res, next) => {
       const previous = await resetState(workbook);
       const reset = { schema: 1, cutoff: [previous?.cutoff, new Date().toISOString()].filter(Boolean).sort().at(-1), ids: [...new Set([...(previous?.ids || []), ...identityState(workbook).events])] };
       const operations = workbook.getWorksheet('Операции');
-      clearSheetRows(operations, 5, 19, new Set([8]));
+      clearSheetRows(operations, 5, 24, new Set([8]));
       for (let row = 5; row <= operations.rowCount; row += 1) {
         operations.getCell(row, 8).value = { formula: `IF(OR(E${row}="",F${row}=""),"",IF(F${row}="RUB",E${row},IF(G${row}="","",E${row}*G${row})))`, result: '' };
       }
@@ -2273,6 +2394,22 @@ app.post('/api/operations', async (req, res, next) => {
   try {
     const payload = await createOperation(req.body);
     res.status(payload.result.duplicate ? 200 : 201).json(payload);
+  } catch (error) { next(error); }
+});
+
+app.post('/api/operations/review-all', async (_req, res, next) => {
+  try {
+    const payload = await mutateWorkbook((workbook) => reviewAutomaticOperations(workbook), { publish: false });
+    res.json(payload);
+  } catch (error) { next(error); }
+});
+
+app.post('/api/operations/:id/review', async (req, res, next) => {
+  try {
+    const row = Number(req.params.id);
+    if (!Number.isInteger(row) || row < 5) throw new InputError('Некорректный номер операции.');
+    const payload = await mutateWorkbook((workbook) => reviewAutomaticOperations(workbook, { row }), { publish: false });
+    res.json(payload);
   } catch (error) { next(error); }
 });
 
@@ -2486,6 +2623,11 @@ app.put('/api/operations/:id', async (req, res, next) => {
       if (operation.amount * operation.rate > 1e12) throw new InputError('Рублёвый эквивалент превышает 1e12.');
       operation.sourceId ||= clean(sheet.getCell(row, 12).value);
       operation.recordedAt = previous.recordedAt;
+      if (previous.automation) {
+        operation.automation = previous.automation;
+        operation.reviewStatus = previous.reviewStatus;
+        operation.reviewedAt = previous.reviewedAt;
+      }
       markMonthlySnapshotsDirty(monthKey(previous.date < operation.date ? previous.date : operation.date));
       writeOperation(sheet, row, operation);
       if (linkedKind === 'investment') {
@@ -2535,7 +2677,7 @@ app.delete('/api/operations/:id', async (req, res, next) => {
         for (let column = 1; column <= 6; column += 1) movements.getCell(movementRow, column).value = null;
       }
       markMonthlySnapshotsDirty(monthKey(dateToIso(sheet.getCell(row, 1).value)));
-      for (const column of [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]) sheet.getCell(row, column).value = null;
+      for (const column of [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]) sheet.getCell(row, column).value = null;
       sheet.getCell(row, 8).value = { formula: `IF(OR(E${row}="",F${row}=""),"",IF(F${row}="RUB",E${row},IF(G${row}="", "",E${row}*G${row})))`, result: '' };
       return { id: row };
     });
@@ -2988,15 +3130,21 @@ app.post('/api/settings/publish-mobile', async (_req, res, next) => {
     const { lists, balances } = await publishMobileSnapshotOnce(SYNC_DIR);
     const warnings = [];
     if (balances?.payload?.missingRates?.length) warnings.push(`Нет курсов: ${balances.payload.missingRates.join(', ')}`);
+    let protocol;
+    try { protocol = await exportMobileProtocolOnce(SYNC_DIR); }
+    catch (error) { warnings.push(publicError(error).error); }
     const listsPublished = Boolean(lists);
     const balancesPublished = Boolean(balances);
+    const protocolPublished = Boolean(protocol);
     res.json({
       listsPublished,
       listsChanged: Boolean(lists?.changed),
       balancesPublished,
       balancesChanged: Boolean(balances?.changed),
+      protocolPublished,
+      protocolChanged: Boolean(protocol?.changed),
       warnings,
-      ok: listsPublished && balancesPublished && warnings.length === 0,
+      ok: listsPublished && balancesPublished && protocolPublished && warnings.length === 0,
     });
   } catch (error) { next(error); }
 });
@@ -3065,6 +3213,7 @@ export async function startApplication(port = PORT, { presenceOptions = {} } = {
   const browserLifecycle = process.env.FINANCE_BROWSER_LIFECYCLE === '1';
   try {
     await workbookStore.exclusive(() => validateWorkbookFile(WORKBOOK_PATH));
+    try { await exportMobileProtocolOnce(SYNC_DIR); } catch (error) { diagnose(error); }
     if (browserLifecycle) clientPresence = createClientPresence({ ...presenceOptions, onEmpty: () => runtimeControl?.stop() });
     server = startServer(port);
     await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });

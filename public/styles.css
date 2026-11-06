@@ -77,6 +77,10 @@ button { cursor: pointer; }
 .topbar-actions { display: flex; align-items: center; gap: 10px; }
 .topbar-actions > button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; line-height: 1.25; }
 .topbar-actions > button[hidden] { display: none; }
+.review-inbox-trigger { position: relative; min-width: 44px; min-height: 44px; padding: 10px; }
+.review-inbox-trigger .topbar-icon svg { width: 20px; height: 20px; }
+.review-count { position: absolute; top: -6px; right: -7px; min-width: 18px; height: 18px; display: grid; place-items: center; padding: 0 4px; border: 2px solid var(--paper); border-radius: 999px; background: var(--coral); color: white; font-size: 10px; font-weight: 900; line-height: 1; }
+.review-count[hidden] { display: none; }
 .topbar-icon { width: 18px; height: 18px; display: inline-grid; place-items: center; flex: 0 0 18px; }
 .topbar-icon-text { font-size: 18px; line-height: 1; }
 .topbar-icon svg { display: block; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
@@ -199,6 +203,10 @@ table { width: 100%; border-collapse: collapse; }
 th { padding: 13px 16px; color: var(--muted); background: #f8f7f1; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .09em; white-space: nowrap; }
 td { padding: 15px 16px; border-top: 1px solid #e9e8e1; font-size: 12px; vertical-align: middle; }
 .operation-date { white-space: nowrap; }
+.operation-type-cell { display: grid; justify-items: start; gap: 5px; }
+.automation-mark { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px; border-radius: 999px; background: #edf3e6; color: #415a31; font-size: 9px; font-weight: 800; white-space: nowrap; }
+.automation-mark.pending { background: #fff2d8; color: #8e5a0b; }
+.automation-source { display: block; max-width: 140px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 tbody tr:hover { background: #fbfaf4; }
 .money { white-space: nowrap; text-align: right; font-weight: 800; }
 .money.expense { color: var(--expense-tag-ink); }
@@ -303,6 +311,22 @@ tbody tr:hover { background: #fbfaf4; }
 #operation-dialog > #operation-form { max-height: inherit; margin-right: 4px; overflow-y: auto; overscroll-behavior: contain; }
 .dialog::backdrop { background: rgba(15,25,21,.62); backdrop-filter: blur(4px); }
 .dialog form { padding: 26px; }
+.review-inbox-dialog { width: min(620px, calc(100vw - 28px)); max-height: min(760px, calc(100vh - 32px)); max-height: min(760px, calc(100dvh - 32px)); }
+.review-inbox-content { max-height: inherit; overflow-y: auto; padding: 26px; overscroll-behavior: contain; }
+.review-inbox-content .dialog-head { margin-bottom: 12px; }
+.review-inbox-explainer { margin: 0 0 18px; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.review-operation-list { display: grid; gap: 10px; max-height: min(48vh, 460px); overflow-y: auto; padding-right: 3px; }
+.review-operation-card { display: grid; gap: 10px; padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: #fbfaf6; }
+.review-operation-card-head { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.review-operation-card-head strong { font-size: 14px; }
+.review-operation-card-date { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.review-operation-details { display: grid; gap: 4px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.review-operation-details strong { color: var(--ink); font-size: 16px; font-variant-numeric: tabular-nums; }
+.review-operation-source { font-size: 10px; }
+.review-operation-card .secondary-button { justify-self: end; padding: 9px 13px; }
+.review-inbox-empty { padding: 24px 16px; border: 1px dashed var(--line); border-radius: 14px; color: var(--muted); text-align: center; font-size: 13px; }
+.review-inbox-actions { justify-content: stretch; }
+.review-inbox-actions .secondary-button { width: 100%; }
 .dialog-head { display: flex; justify-content: space-between; align-items: start; margin-bottom: 20px; }
 .dialog-head h2 { margin: 4px 0 0; font-size: 24px; }
 .type-switch { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 4px; background: #ecebe3; border-radius: 12px; margin-bottom: 18px; }
@@ -516,6 +540,9 @@ input[name="destinationAmount"][readonly], #investment-category-label[readonly] 
   .topbar-actions .primary-button, .topbar-actions .secondary-button { padding: 10px 9px; font-size: 12px; white-space: nowrap; }
   .topbar-actions .desktop-label { display: none; }
   .topbar-actions .mobile-label { display: inline; }
+  .review-inbox-trigger { flex: 0 0 44px; padding: 9px !important; }
+  .review-inbox-content { padding: 20px; }
+  .review-operation-card-head { flex-direction: column; gap: 4px; }
   .balance-hero { padding: 22px 20px; }
   .balance-hero-main { align-items: flex-start; flex-direction: column; gap: 12px; }
   .category-reference-row { grid-template-columns: 50px minmax(0, 1fr) 76px auto; gap: 6px; }
