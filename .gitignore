@@ -5,6 +5,7 @@ node_modules/
 /docs/
 /AGENTS.md
 /PLAN.txt
+/private-connectors/
 /finance.config.json
 /config/
 *.xls
